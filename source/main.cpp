@@ -33,7 +33,11 @@
 #include <string>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
+
+#include "cache.hpp"
 
 namespace {
 
@@ -42,6 +46,7 @@ constexpr std::size_t kRequestSize = 16 * 1024;
 constexpr std::size_t kJsonTokens = 128;
 constexpr const char* kVersion = "0.1.0";
 constexpr const char* kServiceName = "singleDPI";
+constexpr const char* kProcessName = "singleDPI.elf";
 constexpr std::int32_t kSystemServiceParamLanguage = 1;
 constexpr std::int32_t kLanguageChineseTraditional = 10;
 constexpr std::int32_t kLanguageChineseSimplified = 11;
@@ -54,6 +59,10 @@ enum class ApiError : int {
     AppInstUnavailable = -3,
     MissingUrl = -4,
     MissingContentId = -5,
+    MissingTitleId = -6,
+    MissingCategory = -7,
+    InvalidInstallQuery = -8,
+    UnsupportedCategory = -9,
     InvalidJson = -10,
     UnknownAction = -11,
 };
@@ -286,6 +295,8 @@ std::string capabilities_response(const RuntimeState& runtime) {
         runtime.original_authid,
         runtime.current_authid);
 
+    const CacheInfo ci = cache_info();
+
     return std::string("{\"res\":0,\"service\":\"") + kServiceName +
         "\",\"version\":\"" + kVersion + "\"," +
         "\"notification_language\":\"" +
@@ -294,7 +305,8 @@ std::string capabilities_response(const RuntimeState& runtime) {
         "\"message\":\"" + escape_json(runtime_message(runtime)) + "\"," +
         "\"kstuff_available\":" + (runtime.kstuff_available ? "true" : "false") + "," +
         authids +
-        "\"appinst_available\":" + (runtime.appinst_available ? "true" : "false") + "}";
+        "\"appinst_available\":" + (runtime.appinst_available ? "true" : "false") + "," +
+        "\"icon_cache_size_bytes\":" + std::to_string(ci.total_size_bytes) + "}";
 }
 
 std::string install_package(const json_t* json, RuntimeState& runtime) {
@@ -321,13 +333,26 @@ std::string install_package(const json_t* json, RuntimeState& runtime) {
         title = get_string(json, "title", "singleDPI");
     }
 
+    const char* content_id = get_string(json, "content_id", "");
+    const char* icon_url  = get_string(json, "icon_url", "");
+
+    // Attempt icon caching — on failure keep the original remote URL.
+    std::string local_icon_url;
+    if (content_id[0] && icon_url[0]) {
+        local_icon_url = cache_download_icon(content_id, icon_url);
+        if (!local_icon_url.empty())
+            icon_url = local_icon_url.c_str();
+        else
+            std::printf("[singleDPI] icon cache miss, using remote URL\n");
+    }
+
     MetaInfo metadata{
         .uri = url,
         .ex_uri = get_string(json, "ex_uri"),
         .playgo_scenario_id = get_string(json, "playgo_scenario_id"),
-        .content_id = get_string(json, "content_id"),
+        .content_id = content_id,
         .content_name = title,
-        .icon_url = get_string(json, "icon_url"),
+        .icon_url = icon_url,
     };
 
     SceAppInstallPkgInfo package_info{};
@@ -396,6 +421,121 @@ std::string package_status(const json_t* json, const RuntimeState& runtime) {
         escape_json(status.error_info.description) + "\"," + numbers + "}";
 }
 
+bool is_safe_path_component(const char* value) {
+    if (!value || !value[0]) {
+        return false;
+    }
+
+    for (const unsigned char ch : std::string(value)) {
+        if ((ch < 'A' || ch > 'Z') && (ch < 'a' || ch > 'z') &&
+            (ch < '0' || ch > '9') && ch != '-' && ch != '_') {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string installed_package_response(const json_t* json) {
+    const char* title_id = get_string(json, "title_id");
+    const char* category = get_string(json, "category");
+    const char* content_id = get_string(json, "content_id");
+
+    if (!title_id[0]) {
+        return error_response(ApiError::MissingTitleId, "title_id is required");
+    }
+    if (!category[0]) {
+        return error_response(ApiError::MissingCategory, "category is required");
+    }
+    if (!is_safe_path_component(title_id) || std::strlen(title_id) > 32) {
+        return error_response(ApiError::InvalidInstallQuery, "invalid title_id");
+    }
+
+    std::string category_root;
+    std::string title_root;
+    std::string parent_path;
+    std::string path;
+    if (std::strcmp(category, "gd") == 0 ||
+        std::strcmp(category, "gda") == 0 ||
+        std::strcmp(category, "la") == 0) {
+        category_root = "/user/app";
+        title_root = category_root + "/" + title_id;
+        parent_path = title_root;
+        path = parent_path + "/app.json";
+    } else if (std::strcmp(category, "gp") == 0) {
+        category_root = "/user/patch";
+        title_root = category_root + "/" + title_id;
+        parent_path = title_root;
+        path = parent_path + "/patch.json";
+    } else if (std::strcmp(category, "ac") == 0) {
+        const std::size_t content_id_length = std::strlen(content_id);
+        if (content_id_length < 16 || content_id_length > 64 ||
+            !is_safe_path_component(content_id)) {
+            return error_response(ApiError::InvalidInstallQuery,
+                "DLC requires a valid content_id");
+        }
+        const char* content_label = content_id + content_id_length - 16;
+        category_root = "/user/addcont";
+        title_root = category_root + "/" + title_id;
+        parent_path = title_root + "/" + content_label;
+        path = parent_path + "/ac.json";
+    } else {
+        return error_response(ApiError::UnsupportedCategory,
+            "unsupported package category");
+    }
+
+    struct stat info{};
+    const bool user_root_visible = stat("/user", &info) == 0;
+    const bool category_root_visible = stat(category_root.c_str(), &info) == 0;
+    const bool title_root_visible = stat(title_root.c_str(), &info) == 0;
+    const bool parent_visible = stat(parent_path.c_str(), &info) == 0;
+
+    errno = 0;
+    const bool exists = stat(path.c_str(), &info) == 0;
+    const int stat_error = exists ? 0 : errno;
+    const char* stat_error_description = exists ? "" : std::strerror(stat_error);
+
+    return std::string("{\"res\":0,\"exists\":") +
+        (exists ? "true" : "false") +
+        ",\"title_id\":\"" + escape_json(title_id) +
+        "\",\"content_id\":\"" + escape_json(content_id) +
+        "\",\"category\":\"" + escape_json(category) +
+        "\",\"path\":\"" + escape_json(path.c_str()) +
+        "\",\"user_root_visible\":" + (user_root_visible ? "true" : "false") +
+        ",\"category_root_visible\":" + (category_root_visible ? "true" : "false") +
+        ",\"title_root_visible\":" + (title_root_visible ? "true" : "false") +
+        ",\"parent_visible\":" + (parent_visible ? "true" : "false") +
+        ",\"errno\":" + std::to_string(stat_error) +
+        ",\"error_description\":\"" +
+            escape_json(stat_error_description) + "\"}";
+}
+
+std::string cache_info_response() {
+    const CacheInfo ci = cache_info();
+
+    std::string json = "{\"res\":0,\"cache_dir\":\"" + escape_json(ci.dir.c_str()) +
+        "\",\"file_count\":" + std::to_string(ci.files.size()) +
+        ",\"total_size_bytes\":" + std::to_string(ci.total_size_bytes) +
+        ",\"files\":[";
+
+    for (std::size_t i = 0; i < ci.files.size(); ++i) {
+        if (i > 0) json += ",";
+        json += "{\"name\":\"" + escape_json(ci.files[i].name.c_str()) + "\"" +
+            ",\"size\":" + std::to_string(ci.files[i].size_bytes) + "}";
+    }
+
+    json += "]}";
+    return json;
+}
+
+std::string cache_clear_response() {
+    std::uint64_t freed = 0;
+    const bool ok = cache_clear(&freed);
+
+    return std::string("{\"res\":") + (ok ? "0" : "-1") +
+        ",\"message\":\"" + escape_json(ok ? "cache cleared" : "cache clear failed") + "\"" +
+        ",\"bytes_freed\":" + std::to_string(freed) + "}";
+}
+
 std::string handle_request(char* request, RuntimeState& runtime) {
     json_t tokens[kJsonTokens]{};
     const json_t* json = json_create(request, tokens, kJsonTokens);
@@ -414,8 +554,17 @@ std::string handle_request(char* request, RuntimeState& runtime) {
     if (std::strcmp(action, "status") == 0) {
         return package_status(json, runtime);
     }
+    if (std::strcmp(action, "is_installed") == 0) {
+        return installed_package_response(json);
+    }
     if (std::strcmp(action, "install") == 0) {
         return install_package(json, runtime);
+    }
+    if (std::strcmp(action, "cache_info") == 0) {
+        return cache_info_response();
+    }
+    if (std::strcmp(action, "cache_clear") == 0) {
+        return cache_clear_response();
     }
     return error_response(ApiError::UnknownAction, "unknown action");
 }
@@ -467,8 +616,29 @@ int create_server() {
 int main() {
     signal(SIGPIPE, SIG_IGN);
 
+    syscall(SYS_thr_set_name, -1, kProcessName);
+
+    cache_init_dirs();
+    if (!cache_icon_server_start()) {
+        std::printf("[singleDPI] warning: icon cache server failed to start\n");
+    }
+
     g_notification_language = detect_notification_language();
     initialize_runtime(g_runtime);
+
+    // Keep the diagnostic API available even when package installation is not ready.
+    if (!is_ready(g_runtime)) {
+        if (g_notification_language == NotificationLanguage::ChineseSimplified) {
+            notify("singleDPI %s - 尚未就绪\n原因：%s\n载荷进程将退出",
+                kVersion, localized_runtime_message(g_runtime, g_notification_language));
+        } else if (g_notification_language == NotificationLanguage::ChineseTraditional) {
+            notify("singleDPI %s - 尚未就緒\n原因：%s\n載荷行程將退出",
+                kVersion, localized_runtime_message(g_runtime, g_notification_language));
+        } else {
+            notify("singleDPI %s - Not ready\n%s\nDiagnostic API remains available",
+                kVersion, runtime_message(g_runtime));
+        }
+    }
 
     const int server = create_server();
     if (server < 0) {
@@ -479,31 +649,19 @@ int main() {
         } else {
             notify("singleDPI - Startup failed\nCannot listen on TCP port %d", kPort);
         }
+        cache_icon_server_stop();
         return 1;
     }
 
-    if (is_ready(g_runtime)) {
-        if (g_notification_language == NotificationLanguage::ChineseSimplified) {
-            notify("singleDPI %s - 已就绪\n远程 PKG 安装服务\nTCP 端口：%d",
-                kVersion, kPort);
-        } else if (g_notification_language == NotificationLanguage::ChineseTraditional) {
-            notify("singleDPI %s - 已就緒\n遠端 PKG 安裝服務\nTCP 連接埠：%d",
-                kVersion, kPort);
-        } else {
-            notify("singleDPI %s - Ready\nDirect Package Installer\nTCP port: %d",
-                kVersion, kPort);
-        }
-    } else {
-        if (g_notification_language == NotificationLanguage::ChineseSimplified) {
-            notify("singleDPI %s - 尚未就绪\n原因：%s\nTCP 端口：%d",
-                kVersion, localized_runtime_message(g_runtime, g_notification_language), kPort);
-        } else if (g_notification_language == NotificationLanguage::ChineseTraditional) {
-            notify("singleDPI %s - 尚未就緒\n原因：%s\nTCP 連接埠：%d",
-                kVersion, localized_runtime_message(g_runtime, g_notification_language), kPort);
-        } else {
-            notify("singleDPI %s - Not ready\n%s\nTCP port: %d",
-                kVersion, runtime_message(g_runtime), kPort);
-        }
+    if (is_ready(g_runtime) && g_notification_language == NotificationLanguage::ChineseSimplified) {
+        notify("singleDPI %s - 已就绪\n远程 PKG 安装服务\nTCP 端口：%d",
+            kVersion, kPort);
+    } else if (is_ready(g_runtime) && g_notification_language == NotificationLanguage::ChineseTraditional) {
+        notify("singleDPI %s - 已就緒\n遠端 PKG 安裝服務\nTCP 連接埠：%d",
+            kVersion, kPort);
+    } else if (is_ready(g_runtime)) {
+        notify("singleDPI %s - Ready\nDirect Package Installer\nTCP port: %d",
+            kVersion, kPort);
     }
 
     for (;;) {
@@ -529,5 +687,6 @@ int main() {
     }
 
     close(server);
+    cache_icon_server_stop();
     return 0;
 }

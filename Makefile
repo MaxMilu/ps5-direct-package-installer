@@ -8,7 +8,7 @@ else
 endif
 
 TARGET := bin/singleDPI.elf
-SOURCES := source/main.cpp third_party/tiny-json/tiny-json.cpp
+SOURCES := source/main.cpp source/cache.cpp third_party/tiny-json/tiny-json.cpp
 
 CXXFLAGS := -std=c++20 -O2 -Wall -Wextra -Wpedantic \
 	-Iinclude -Ithird_party/tiny-json
@@ -18,7 +18,7 @@ LDADD := -lSceNet -lSceSystemService -lSceAppInstUtil -lkernel_sys
 
 all: $(TARGET)
 
-$(TARGET): $(SOURCES) include/appinst.hpp
+$(TARGET): $(SOURCES) include/appinst.hpp include/cache.hpp
 	mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(LDADD) -o $@ $(SOURCES)
 	$(STRIP) --strip-unneeded $@
