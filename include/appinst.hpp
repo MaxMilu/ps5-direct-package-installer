@@ -1,3 +1,13 @@
+/*
+ * AppInst structures derived from etaHEN.
+ * Copyright (C) 2025 etaHEN / LightningMods
+ * Modifications Copyright (C) 2026 MaxMilu
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * See the repository LICENSE and NOTICE files for complete terms and
+ * attribution.
+ */
+
 #pragma once
 
 #include <cstddef>

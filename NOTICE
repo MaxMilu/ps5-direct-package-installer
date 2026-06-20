@@ -1,0 +1,23 @@
+PS5 Direct Package Installer (singleDPI)
+
+This project is a modified and independently packaged work derived from the
+Direct Package Installer implementation and AppInst structure definitions in:
+
+    etaHEN
+    https://github.com/etaHEN/etaHEN
+    Copyright (C) 2025 etaHEN / LightningMods
+
+The standalone service, protocol extensions, runtime checks, status API,
+documentation, and related modifications were made in 2026 by MaxMilu.
+
+This is an unofficial derivative project. It is not an official etaHEN release,
+and issues in this project should not be attributed to or reported as etaHEN
+issues unless they can be reproduced in etaHEN itself.
+
+The combined work is distributed under the GNU General Public License, version
+3 or (at your option) any later version. See LICENSE for the complete license.
+When distributing binaries, provide the corresponding source and license terms
+as required by the GNU GPL.
+
+The vendored tiny-json component is a separate MIT-licensed work. Its copyright
+and license notice are preserved in third_party/tiny-json/LICENSE.

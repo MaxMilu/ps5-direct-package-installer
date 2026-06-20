@@ -8,6 +8,31 @@ remote PKG installation requests over TCP port 9090 and does not load etaHEN or 
 Tested on PS5 firmware 5.50 with compatible kstuff/kstuff-lite for installing and launching
 PS4 FPKGs.
 
+## Project origin (read first)
+
+This project is an independently packaged and modified derivative of the Direct Package Installer
+implementation and AppInst structure definitions from
+[etaHEN](https://github.com/etaHEN/etaHEN). The original code carries this notice:
+
+```text
+Copyright (C) 2025 etaHEN / LightningMods
+```
+
+The standalone payload, TCP protocol extensions, runtime capability checks, status API, and
+documentation were modified by MaxMilu in 2026. This is an unofficial derivative project, not an
+official etaHEN release. Problems specific to this project should not be attributed to etaHEN.
+
+## License
+
+The derivative work is released under the **GNU GPL version 3 or any later version**. The root
+[LICENSE](LICENSE) contains the complete GPL v3 text matching etaHEN's license version, while
+[NOTICE](NOTICE) records the origin, modifications, and copyright attribution. Distribution of an
+ELF or other binary must include access to corresponding source and license information as required
+by the GPL.
+
+`third_party/tiny-json` is a separate MIT-licensed component. Its original copyright and license
+are preserved in [`third_party/tiny-json/LICENSE`](third_party/tiny-json/LICENSE).
+
 ## Client and usage
 
 ### Requirements
@@ -229,9 +254,3 @@ own notifications are text-only and do not use the remote `icon_url` as their no
 `singleDPI` remains the ELF filename and API `service` identifier for compatibility with existing
 clients. The repository and public project name are **PS5 Direct Package Installer**, with the full
 description **PS5 Direct Package Installer (singleDPI)**.
-
-## License
-
-This project is GPL-3.0-or-later. AppInst structures and DPI behavior are derived from
-[etaHEN](https://github.com/LightningMods/etaHEN). The vendored tiny-json parser is MIT licensed;
-see `third_party/tiny-json/LICENSE`.

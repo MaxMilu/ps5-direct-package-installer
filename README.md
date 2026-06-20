@@ -7,6 +7,27 @@
 
 已在 PS5 5.50 上配合兼容的 kstuff/kstuff-lite 完成 PS4 FPKG 安装和启动验证。
 
+## 项目来源（请先阅读）
+
+本项目基于 [etaHEN](https://github.com/etaHEN/etaHEN) 的 Direct Package Installer
+实现及 AppInst 结构定义进行独立化和修改。原始代码版权声明为：
+
+```text
+Copyright (C) 2025 etaHEN / LightningMods
+```
+
+2026 年由 MaxMilu 完成独立 payload、TCP 协议扩展、运行能力检查、状态接口和文档等修改。
+本项目是非官方派生项目，不是 etaHEN 官方版本；本项目自身问题不应归因于 etaHEN。
+
+## 许可证
+
+整个派生项目依照 **GNU GPL v3 或任何后续版本**发布。根目录 [LICENSE](LICENSE)
+包含与 etaHEN 相同版本的完整 GPL v3 文本，[NOTICE](NOTICE) 记录来源、修改和版权归属。
+发布 ELF 等二进制时，必须同时按照 GPL 要求提供对应源代码和许可证信息。
+
+`third_party/tiny-json` 是独立的 MIT 许可组件，其原始版权和许可保留在
+[`third_party/tiny-json/LICENSE`](third_party/tiny-json/LICENSE)。
+
 ## 客户端与使用说明
 
 ### 准备内容
@@ -221,9 +242,3 @@ singleDPI 只在关键节点发送通知：
 
 `singleDPI` 保留为 ELF 文件名和 API `service` 标识，以兼容现有客户端。仓库和对外名称使用
 **PS5 Direct Package Installer**，完整描述为 **PS5 Direct Package Installer (singleDPI)**。
-
-## License
-
-本项目使用 GPL-3.0-or-later。AppInst 结构和 DPI 行为来源于
-[etaHEN](https://github.com/LightningMods/etaHEN)。随项目附带的 tiny-json 使用 MIT License，
-详情参见 `third_party/tiny-json/LICENSE`。
