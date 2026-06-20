@@ -24,6 +24,7 @@
 
 #include <arpa/inet.h>
 #include <cstdarg>
+#include <cstdint>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -41,6 +42,9 @@ constexpr std::size_t kRequestSize = 16 * 1024;
 constexpr std::size_t kJsonTokens = 128;
 constexpr const char* kVersion = "0.1.0";
 constexpr const char* kServiceName = "singleDPI";
+constexpr std::int32_t kSystemServiceParamLanguage = 1;
+constexpr std::int32_t kLanguageChineseTraditional = 10;
+constexpr std::int32_t kLanguageChineseSimplified = 11;
 constexpr int kDebugAuthIdProbeProtection = PROT_READ | PROT_WRITE | PROT_EXEC;
 constexpr unsigned long kDebugAuthId = 0x4800000000000006UL;
 
@@ -54,6 +58,12 @@ enum class ApiError : int {
     UnknownAction = -11,
 };
 
+enum class NotificationLanguage {
+    English,
+    ChineseSimplified,
+    ChineseTraditional,
+};
+
 struct NotificationRequest {
     char reserved[45];
     char message[3075];
@@ -65,6 +75,9 @@ extern "C" int sceKernelSendNotificationRequest(
     NotificationRequest* request,
     std::size_t size,
     int blocking);
+extern "C" int sceSystemServiceParamGetInt(
+    std::int32_t parameter_id,
+    std::int32_t* value);
 extern "C" unsigned long kernel_get_ucred_authid(int pid);
 extern "C" int kernel_set_ucred_authid(int pid, unsigned long authid);
 
@@ -78,6 +91,7 @@ struct RuntimeState {
 };
 
 RuntimeState g_runtime;
+NotificationLanguage g_notification_language = NotificationLanguage::English;
 
 void notify(const char* format, ...) {
     NotificationRequest request{};
@@ -89,6 +103,29 @@ void notify(const char* format, ...) {
 
     sceKernelSendNotificationRequest(0, &request, sizeof(request), 0);
     std::printf("[singleDPI] %s\n", request.message);
+}
+
+NotificationLanguage detect_notification_language() {
+    std::int32_t language = 0;
+    if (sceSystemServiceParamGetInt(kSystemServiceParamLanguage, &language) != 0) {
+        return NotificationLanguage::English;
+    }
+
+    if (language == kLanguageChineseSimplified) {
+        return NotificationLanguage::ChineseSimplified;
+    }
+    if (language == kLanguageChineseTraditional) {
+        return NotificationLanguage::ChineseTraditional;
+    }
+    return NotificationLanguage::English;
+}
+
+const char* notification_language_code(NotificationLanguage language) {
+    switch (language) {
+    case NotificationLanguage::ChineseSimplified: return "zh-Hans";
+    case NotificationLanguage::ChineseTraditional: return "zh-Hant";
+    default: return "en";
+    }
 }
 
 std::string escape_json(const char* input) {
@@ -196,6 +233,50 @@ const char* runtime_message(const RuntimeState& runtime) {
     return "ready to install packages";
 }
 
+const char* localized_runtime_message(
+    const RuntimeState& runtime,
+    NotificationLanguage language) {
+    if (language == NotificationLanguage::ChineseSimplified) {
+        if (!runtime.kstuff_available) return "未检测到 kstuff 所需能力";
+        if (!runtime.authid_available) return "无法获取 AppInst 调试 AuthID";
+        if (!runtime.appinst_available) return "AppInst 初始化失败";
+        return "可以安装 PKG";
+    }
+    if (language == NotificationLanguage::ChineseTraditional) {
+        if (!runtime.kstuff_available) return "未偵測到 kstuff 所需能力";
+        if (!runtime.authid_available) return "無法取得 AppInst 偵錯 AuthID";
+        if (!runtime.appinst_available) return "AppInst 初始化失敗";
+        return "可以安裝 PKG";
+    }
+    return runtime_message(runtime);
+}
+
+void notify_install_failed(const char* title, int error) {
+    if (g_notification_language == NotificationLanguage::ChineseSimplified) {
+        notify("singleDPI - 安装失败\n标题：%s\n错误：0x%08X",
+            title, static_cast<unsigned int>(error));
+    } else if (g_notification_language == NotificationLanguage::ChineseTraditional) {
+        notify("singleDPI - 安裝失敗\n標題：%s\n錯誤：0x%08X",
+            title, static_cast<unsigned int>(error));
+    } else {
+        notify("singleDPI - Install failed\nTitle: %s\nError: 0x%08X",
+            title, static_cast<unsigned int>(error));
+    }
+}
+
+void notify_install_started(const char* title, const char* content_id) {
+    if (g_notification_language == NotificationLanguage::ChineseSimplified) {
+        notify("singleDPI - 安装任务已开始\n标题：%s\n内容 ID：%.47s",
+            title, content_id);
+    } else if (g_notification_language == NotificationLanguage::ChineseTraditional) {
+        notify("singleDPI - 安裝工作已開始\n標題：%s\n內容 ID：%.47s",
+            title, content_id);
+    } else {
+        notify("singleDPI - Installation started\nTitle: %s\nContent ID: %.47s",
+            title, content_id);
+    }
+}
+
 std::string capabilities_response(const RuntimeState& runtime) {
     char authids[192];
     std::snprintf(authids, sizeof(authids),
@@ -207,6 +288,8 @@ std::string capabilities_response(const RuntimeState& runtime) {
 
     return std::string("{\"res\":0,\"service\":\"") + kServiceName +
         "\",\"version\":\"" + kVersion + "\"," +
+        "\"notification_language\":\"" +
+            notification_language_code(g_notification_language) + "\"," +
         "\"ready\":" + (is_ready(runtime) ? "true" : "false") + "," +
         "\"message\":\"" + escape_json(runtime_message(runtime)) + "\"," +
         "\"kstuff_available\":" + (runtime.kstuff_available ? "true" : "false") + "," +
@@ -253,8 +336,7 @@ std::string install_package(const json_t* json, RuntimeState& runtime) {
         &metadata, &package_info, &playgo_info);
 
     if (result != 0) {
-        notify("singleDPI - Install failed\nTitle: %.160s\nError: 0x%08X",
-            title, static_cast<unsigned int>(result));
+        notify_install_failed(title, result);
 
         char response[256];
         std::snprintf(response, sizeof(response),
@@ -264,8 +346,7 @@ std::string install_package(const json_t* json, RuntimeState& runtime) {
 
     std::snprintf(runtime.last_content_id, sizeof(runtime.last_content_id), "%s",
         package_info.content_id);
-    notify("singleDPI - Installation started\nTitle: %.160s\nContent ID: %.47s",
-        title, runtime.last_content_id);
+    notify_install_started(title, runtime.last_content_id);
 
     return std::string("{\"res\":0,\"content_id\":\"") +
         escape_json(runtime.last_content_id) + "\",\"title\":\"" +
@@ -386,20 +467,43 @@ int create_server() {
 int main() {
     signal(SIGPIPE, SIG_IGN);
 
+    g_notification_language = detect_notification_language();
     initialize_runtime(g_runtime);
 
     const int server = create_server();
     if (server < 0) {
-        notify("singleDPI - Startup failed\nCannot listen on TCP port %d", kPort);
+        if (g_notification_language == NotificationLanguage::ChineseSimplified) {
+            notify("singleDPI - 启动失败\n无法监听 TCP 端口 %d", kPort);
+        } else if (g_notification_language == NotificationLanguage::ChineseTraditional) {
+            notify("singleDPI - 啟動失敗\n無法監聽 TCP 連接埠 %d", kPort);
+        } else {
+            notify("singleDPI - Startup failed\nCannot listen on TCP port %d", kPort);
+        }
         return 1;
     }
 
     if (is_ready(g_runtime)) {
-        notify("singleDPI %s - Ready\nDirect Package Installer\nTCP port: %d",
-            kVersion, kPort);
+        if (g_notification_language == NotificationLanguage::ChineseSimplified) {
+            notify("singleDPI %s - 已就绪\n远程 PKG 安装服务\nTCP 端口：%d",
+                kVersion, kPort);
+        } else if (g_notification_language == NotificationLanguage::ChineseTraditional) {
+            notify("singleDPI %s - 已就緒\n遠端 PKG 安裝服務\nTCP 連接埠：%d",
+                kVersion, kPort);
+        } else {
+            notify("singleDPI %s - Ready\nDirect Package Installer\nTCP port: %d",
+                kVersion, kPort);
+        }
     } else {
-        notify("singleDPI %s - Not ready\n%s\nTCP port: %d",
-            kVersion, runtime_message(g_runtime), kPort);
+        if (g_notification_language == NotificationLanguage::ChineseSimplified) {
+            notify("singleDPI %s - 尚未就绪\n原因：%s\nTCP 端口：%d",
+                kVersion, localized_runtime_message(g_runtime, g_notification_language), kPort);
+        } else if (g_notification_language == NotificationLanguage::ChineseTraditional) {
+            notify("singleDPI %s - 尚未就緒\n原因：%s\nTCP 連接埠：%d",
+                kVersion, localized_runtime_message(g_runtime, g_notification_language), kPort);
+        } else {
+            notify("singleDPI %s - Not ready\n%s\nTCP port: %d",
+                kVersion, runtime_message(g_runtime), kPort);
+        }
     }
 
     for (;;) {

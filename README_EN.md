@@ -65,7 +65,7 @@ Exploit / ELF Loader
   -> send the installation request from the computer
 ```
 
-The PS5 displays the following notification when ready:
+The payload reads the PS5 system language before displaying notifications. English example:
 
 ```text
 singleDPI 0.1.0 - Ready
@@ -155,6 +155,8 @@ The Makefile uses the SDK-provided `SceNet`, `SceSystemService`, `SceAppInstUtil
 - Detection of the required RWX capability provided by kstuff.
 - Debug AuthID transition and verification before AppInst initialization.
 - PS5 notifications for service state, title, Content ID, and error code.
+- Notifications follow the PS5 system language, with Simplified Chinese, Traditional Chinese,
+  and an English fallback.
 - No runtime or build dependency on etaHEN source, processes, or stub libraries.
 
 ## API reference
@@ -170,6 +172,7 @@ document, read one JSON response, and let the server close the connection. A req
   "res": 0,
   "service": "singleDPI",
   "version": "0.1.0",
+  "notification_language": "en",
   "ready": true,
   "message": "ready to install packages",
   "kstuff_available": true,
@@ -243,6 +246,11 @@ singleDPI only sends notifications at important transitions:
 - Service not ready: missing kstuff capability, Debug AuthID, or AppInst state.
 - Installation started: client-provided title and the Content ID returned by AppInst.
 - Installation call failed: title and hexadecimal AppInst error code.
+
+The notification language is read through `sceSystemServiceParamGetInt`. Simplified Chinese uses
+`zh-Hans`, Traditional Chinese uses `zh-Hant`, and every other language or a read failure falls
+back to English (`en`). The selected value is returned as `notification_language` by `ping`.
+API field names and error strings remain English for client compatibility.
 
 `content_name` and `icon_url` are used by the system download and installation UI. singleDPI's
 own notifications are text-only and do not use the remote `icon_url` as their notification icon.
