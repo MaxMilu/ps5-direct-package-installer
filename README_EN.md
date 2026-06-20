@@ -33,6 +33,14 @@ by the GPL.
 `third_party/tiny-json` is a separate MIT-licensed component. Its original copyright and license
 are preserved in [`third_party/tiny-json/LICENSE`](third_party/tiny-json/LICENSE).
 
+## AI-assisted development disclosure
+
+AI-assisted coding tools, including OpenAI Codex, were used for parts of the code analysis,
+refactoring, debugging, and documentation. These tools served only as development assistance and
+are not authors or copyright holders of this project. Every merged change is reviewed by the
+project maintainer and verified through compilation or console testing where applicable. The
+project maintainer remains responsible for the final code, releases, and maintenance.
+
 ## Client and usage
 
 ### Requirements

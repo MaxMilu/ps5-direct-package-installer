@@ -10,6 +10,11 @@ Direct Package Installer implementation and AppInst structure definitions in:
 The standalone service, protocol extensions, runtime checks, status API,
 documentation, and related modifications were made in 2026 by MaxMilu.
 
+AI-assisted coding tools, including OpenAI Codex, were used for portions of
+code analysis, refactoring, debugging, and documentation. All incorporated
+changes remain subject to maintainer review and responsibility. AI tools are
+not identified as authors or copyright holders of this work.
+
 This is an unofficial derivative project. It is not an official etaHEN release,
 and issues in this project should not be attributed to or reported as etaHEN
 issues unless they can be reproduced in etaHEN itself.

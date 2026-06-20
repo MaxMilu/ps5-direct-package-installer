@@ -28,6 +28,13 @@ Copyright (C) 2025 etaHEN / LightningMods
 `third_party/tiny-json` 是独立的 MIT 许可组件，其原始版权和许可保留在
 [`third_party/tiny-json/LICENSE`](third_party/tiny-json/LICENSE)。
 
+## AI 辅助开发说明
+
+本项目的部分代码分析、重构、问题排查和文档编写使用了 AI 辅助编程工具，包括
+OpenAI Codex。AI 工具仅作为开发辅助，不是本项目的作者或版权主体。所有合入的修改均由
+项目维护者审查，并结合编译或真机测试进行验证；项目维护者对最终代码、发布内容和维护
+责任负责。
+
 ## 客户端与使用说明
 
 ### 准备内容
