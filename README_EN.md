@@ -8,6 +8,8 @@ remote PKG installation requests over TCP port 9090 and does not load etaHEN or 
 Tested on PS5 firmware 5.50 with compatible kstuff/kstuff-lite for installing and launching
 PS4 FPKGs.
 
+Current version: `0.1.0`
+
 ## Project origin (read first)
 
 This project is an independently packaged and modified derivative of the Direct Package Installer
@@ -66,7 +68,7 @@ Exploit / ELF Loader
 The PS5 displays the following notification when ready:
 
 ```text
-singleDPI v2 - Ready
+singleDPI 0.1.0 - Ready
 Direct Package Installer
 TCP port: 9090
 ```
@@ -167,7 +169,7 @@ document, read one JSON response, and let the server close the connection. A req
 {
   "res": 0,
   "service": "singleDPI",
-  "version": 2,
+  "version": "0.1.0",
   "ready": true,
   "message": "ready to install packages",
   "kstuff_available": true,

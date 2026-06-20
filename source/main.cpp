@@ -39,7 +39,7 @@ namespace {
 constexpr int kPort = 9090;
 constexpr std::size_t kRequestSize = 16 * 1024;
 constexpr std::size_t kJsonTokens = 128;
-constexpr int kProtocolVersion = 2;
+constexpr const char* kVersion = "0.1.0";
 constexpr const char* kServiceName = "singleDPI";
 constexpr int kDebugAuthIdProbeProtection = PROT_READ | PROT_WRITE | PROT_EXEC;
 constexpr unsigned long kDebugAuthId = 0x4800000000000006UL;
@@ -206,7 +206,7 @@ std::string capabilities_response(const RuntimeState& runtime) {
         runtime.current_authid);
 
     return std::string("{\"res\":0,\"service\":\"") + kServiceName +
-        "\",\"version\":" + std::to_string(kProtocolVersion) + "," +
+        "\",\"version\":\"" + kVersion + "\"," +
         "\"ready\":" + (is_ready(runtime) ? "true" : "false") + "," +
         "\"message\":\"" + escape_json(runtime_message(runtime)) + "\"," +
         "\"kstuff_available\":" + (runtime.kstuff_available ? "true" : "false") + "," +
@@ -395,11 +395,11 @@ int main() {
     }
 
     if (is_ready(g_runtime)) {
-        notify("singleDPI v%d - Ready\nDirect Package Installer\nTCP port: %d",
-            kProtocolVersion, kPort);
+        notify("singleDPI %s - Ready\nDirect Package Installer\nTCP port: %d",
+            kVersion, kPort);
     } else {
-        notify("singleDPI v%d - Not ready\n%s\nTCP port: %d",
-            kProtocolVersion, runtime_message(g_runtime), kPort);
+        notify("singleDPI %s - Not ready\n%s\nTCP port: %d",
+            kVersion, runtime_message(g_runtime), kPort);
     }
 
     for (;;) {
