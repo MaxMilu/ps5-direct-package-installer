@@ -151,7 +151,10 @@ The Makefile uses the SDK-provided `SceNet`, `SceSystemService`, `SceAppInstUtil
 - TCP port 9090 JSON API.
 - Compatibility with etaHEN's simple `{ "url": "..." }` request.
 - Installation metadata including title, Content ID, icon, PlayGo, and extended URI.
+- HTTP PNG icon caching on the PS5, served locally to AppInst on port 9091.
 - Download, copy, Promote progress, and AppInst error queries.
+- Installed-record detection for Base, Patch, and DLC packages.
+- Icon cache inspection and manual cache clearing.
 - Detection of the required RWX capability provided by kstuff.
 - Debug AuthID transition and verification before AppInst initialization.
 - PS5 notifications for service state, title, Content ID, and error code.
@@ -179,7 +182,8 @@ document, read one JSON response, and let the server close the connection. A req
   "authid_available": true,
   "original_authid": "0x4800000000010003",
   "current_authid": "0x4800000000000006",
-  "appinst_available": true
+  "appinst_available": true,
+  "icon_cache_size_bytes": 245760
 }
 ```
 
@@ -192,7 +196,9 @@ Only `url` is required:
 - `url`: PKG HTTP URL reachable from the PS5.
 - `content_name`: title shown by the download and installation UI.
 - `content_id`: used to display and identify the task; it should match the PKG.
-- `icon_url`: PNG URL reachable from the PS5 and available throughout installation.
+- `icon_url`: PNG URL reachable from the PS5. HTTP PNGs are cached under
+  `/data/singleDPI/icons` and served to AppInst from `http://127.0.0.1:9091`; the original URL is
+  retained when caching fails.
 - `playgo_scenario_id`, `ex_uri`: optional AppInst parameters.
 
 Successful response:
@@ -224,6 +230,45 @@ The response includes `status`, `downloaded_size`, `total_size`, `progress`,
 `promote_progress`, `remain_time`, `local_copy_percent`, and AppInst error fields. The system
 AppInst service performs the task independently; singleDPI only remembers the latest Content ID.
 
+### `is_installed`
+
+Check PS5 installation records using the SFO `CATEGORY`, `TITLE_ID`, and `CONTENT_ID`:
+
+```json
+{
+  "action": "is_installed",
+  "title_id": "CUSA32184",
+  "content_id": "EP3643-CUSA32184_00-CULTISTPAC000000",
+  "category": "ac"
+}
+```
+
+Path rules:
+
+- `gd`, `gda`, `la`: `/user/app/<TITLE_ID>/app.json`
+- `gp`: `/user/patch/<TITLE_ID>/patch.json`
+- `ac`: `/user/addcont/<TITLE_ID>/<last 16 characters of CONTENT_ID>/ac.json`
+
+The `exists` response field reports whether the target JSON exists. Diagnostic fields include
+`user_root_visible`, `category_root_visible`, `title_root_visible`, `parent_visible`, `errno`, and
+`error_description`. This API checks record paths only; it does not compare installed versions or
+PKG digests.
+
+### `cache_info` and `cache_clear`
+
+```json
+{"action":"cache_info"}
+```
+
+Returns the cache directory, file list, file count, and total size. Clear the cache with:
+
+```json
+{"action":"cache_clear"}
+```
+
+`cache_clear` returns the number of bytes freed and only removes files matching singleDPI's icon
+cache naming convention.
+
 ### Error codes
 
 | `res` | Meaning |
@@ -233,6 +278,10 @@ AppInst service performs the task independently; singleDPI only remembers the la
 | `-3` | AppInst initialization is unavailable |
 | `-4` | Installation URL is missing |
 | `-5` | Content ID is missing from a status query |
+| `-6` | Title ID is missing from an installation check |
+| `-7` | CATEGORY is missing from an installation check |
+| `-8` | Invalid installation-check parameters or invalid DLC Content ID |
+| `-9` | Unsupported CATEGORY |
 | `-10` | Invalid JSON |
 | `-11` | Unknown action |
 
@@ -262,6 +311,13 @@ own notifications are text-only and do not use the remote `icon_url` as their no
   Use it only on a trusted LAN.
 - Metadata is supplied by the client. singleDPI does not parse the remote PKG to validate its title,
   Content ID, or icon.
+- Icon caching actively downloads HTTP PNGs only, with an 8 MiB per-file limit. HTTPS URLs and
+  validation failures fall back to the original URL.
+- There is currently no automatic total cache limit or eviction policy. Use `cache_info` and
+  `cache_clear` for manual management.
+- The local icon server listens on `127.0.0.1:9091` only while singleDPI is running.
+- `is_installed` depends on the currently verified `/user/app`, `/user/patch`, and `/user/addcont`
+  record layout.
 - The service handles one connection at a time and only remembers the latest installation task.
 - AppInst states such as `playable` do not mean a game needs no Backport or is guaranteed to launch.
 - Capability detection does not replace firmware matching. Incorrect kstuff versions can still
