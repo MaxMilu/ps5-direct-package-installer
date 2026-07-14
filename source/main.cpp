@@ -23,15 +23,20 @@
 #include "tiny-json.hpp"
 
 #include <arpa/inet.h>
+#include <algorithm>
+#include <cctype>
 #include <cstdarg>
 #include <cstdint>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <map>
 #include <netinet/in.h>
 #include <signal.h>
 #include <string>
 #include <sys/mman.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -42,7 +47,9 @@
 namespace {
 
 constexpr int kPort = 9090;
+constexpr int kDpiV2Port = 12800;
 constexpr std::size_t kRequestSize = 16 * 1024;
+constexpr std::size_t kDpiV2RequestSize = 64 * 1024;
 constexpr std::size_t kJsonTokens = 128;
 constexpr const char* kVersion = "0.1.0";
 constexpr const char* kServiceName = "singleDPI";
@@ -87,6 +94,7 @@ extern "C" int sceKernelSendNotificationRequest(
 extern "C" int sceSystemServiceParamGetInt(
     std::int32_t parameter_id,
     std::int32_t* value);
+extern "C" std::uint32_t kernel_get_fw_version();
 extern "C" unsigned long kernel_get_ucred_authid(int pid);
 extern "C" int kernel_set_ucred_authid(int pid, unsigned long authid);
 
@@ -171,6 +179,24 @@ const char* get_string(const json_t* json, const char* name, const char* fallbac
 std::string error_response(ApiError code, const char* message) {
     return std::string("{\"res\":") + std::to_string(static_cast<int>(code)) +
         ",\"error\":\"" + escape_json(message) + "\"}";
+}
+
+std::string firmware_version_string() {
+    const std::uint32_t fw = kernel_get_fw_version();
+    const std::uint32_t major_bcd = (fw >> 24) & 0xFFu;
+    const std::uint32_t minor_bcd = (fw >> 16) & 0xFFu;
+    const std::uint32_t major =
+        ((major_bcd >> 4) & 0xFu) * 10u + (major_bcd & 0xFu);
+    const std::uint32_t minor =
+        ((minor_bcd >> 4) & 0xFu) * 10u + (minor_bcd & 0xFu);
+
+    if (major == 0 && minor == 0) {
+        return "unknown";
+    }
+
+    char out[16];
+    std::snprintf(out, sizeof(out), "%u.%02u", major, minor);
+    return out;
 }
 
 bool probe_required_rwx_capability() {
@@ -299,6 +325,10 @@ std::string capabilities_response(const RuntimeState& runtime) {
 
     return std::string("{\"res\":0,\"service\":\"") + kServiceName +
         "\",\"version\":\"" + kVersion + "\"," +
+        "\"firmware_version\":\"" + escape_json(firmware_version_string().c_str()) + "\"," +
+        "\"dpi_v1_port\":" + std::to_string(kPort) + "," +
+        "\"dpi_v2_url_port\":" + std::to_string(kDpiV2Port) + "," +
+        "\"dpi_v2_url_available\":true," +
         "\"notification_language\":\"" +
             notification_language_code(g_notification_language) + "\"," +
         "\"ready\":" + (is_ready(runtime) ? "true" : "false") + "," +
@@ -569,6 +599,204 @@ std::string handle_request(char* request, RuntimeState& runtime) {
     return error_response(ApiError::UnknownAction, "unknown action");
 }
 
+std::string url_decode(const std::string& value) {
+    std::string out;
+    out.reserve(value.size());
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        if (value[i] == '+') {
+            out += ' ';
+        } else if (value[i] == '%' && i + 2 < value.size() &&
+            std::isxdigit(static_cast<unsigned char>(value[i + 1])) &&
+            std::isxdigit(static_cast<unsigned char>(value[i + 2]))) {
+            char hex[3] = { value[i + 1], value[i + 2], '\0' };
+            out += static_cast<char>(std::strtoul(hex, nullptr, 16));
+            i += 2;
+        } else {
+            out += value[i];
+        }
+    }
+    return out;
+}
+
+std::map<std::string, std::string> parse_urlencoded_form(const std::string& body) {
+    std::map<std::string, std::string> fields;
+    std::size_t start = 0;
+    while (start <= body.size()) {
+        const std::size_t end = body.find('&', start);
+        const std::string pair = body.substr(start,
+            end == std::string::npos ? std::string::npos : end - start);
+        const std::size_t equals = pair.find('=');
+        if (equals != std::string::npos) {
+            fields[url_decode(pair.substr(0, equals))] =
+                url_decode(pair.substr(equals + 1));
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+    return fields;
+}
+
+std::map<std::string, std::string> parse_multipart_text_form(
+    const std::string& body,
+    const std::string& content_type) {
+    std::map<std::string, std::string> fields;
+    const std::string marker = "boundary=";
+    const std::size_t boundary_pos = content_type.find(marker);
+    if (boundary_pos == std::string::npos) {
+        return fields;
+    }
+
+    std::string boundary = content_type.substr(boundary_pos + marker.size());
+    if (!boundary.empty() && boundary.front() == '"') {
+        boundary.erase(0, 1);
+        const std::size_t quote = boundary.find('"');
+        if (quote != std::string::npos) {
+            boundary.erase(quote);
+        }
+    } else {
+        const std::size_t semicolon = boundary.find(';');
+        if (semicolon != std::string::npos) {
+            boundary.erase(semicolon);
+        }
+    }
+    boundary = "--" + boundary;
+
+    std::size_t part_start = body.find(boundary);
+    while (part_start != std::string::npos) {
+        part_start += boundary.size();
+        if (part_start + 2 <= body.size() && body.compare(part_start, 2, "--") == 0) {
+            break;
+        }
+        if (part_start + 2 <= body.size() && body.compare(part_start, 2, "\r\n") == 0) {
+            part_start += 2;
+        }
+
+        const std::size_t headers_end = body.find("\r\n\r\n", part_start);
+        if (headers_end == std::string::npos) {
+            break;
+        }
+
+        const std::string headers = body.substr(part_start, headers_end - part_start);
+        const std::size_t name_pos = headers.find("name=\"");
+        if (name_pos != std::string::npos) {
+            const std::size_t name_start = name_pos + 6;
+            const std::size_t name_end = headers.find('"', name_start);
+            const std::size_t value_start = headers_end + 4;
+            const std::size_t next_boundary = body.find(boundary, value_start);
+            if (name_end != std::string::npos && next_boundary != std::string::npos) {
+                std::string value = body.substr(value_start, next_boundary - value_start);
+                while (!value.empty() && (value.back() == '\r' || value.back() == '\n')) {
+                    value.pop_back();
+                }
+                fields[headers.substr(name_start, name_end - name_start)] = value;
+            }
+        }
+
+        part_start = body.find(boundary, headers_end + 4);
+    }
+    return fields;
+}
+
+std::string lowercase_ascii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return value;
+}
+
+std::string http_header_value(const std::string& request, const std::string& header) {
+    const std::string lower_request = lowercase_ascii(request);
+    const std::string lower_header = lowercase_ascii(header) + ":";
+    const std::size_t pos = lower_request.find(lower_header);
+    if (pos == std::string::npos) {
+        return "";
+    }
+    std::size_t value_start = pos + lower_header.size();
+    while (value_start < request.size() &&
+        (request[value_start] == ' ' || request[value_start] == '\t')) {
+        ++value_start;
+    }
+    const std::size_t value_end = request.find("\r\n", value_start);
+    return request.substr(value_start,
+        value_end == std::string::npos ? std::string::npos : value_end - value_start);
+}
+
+std::string http_response(const std::string& body, const char* status = "200 OK") {
+    return std::string("HTTP/1.1 ") + status + "\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "Content-Type: text/plain; charset=utf-8\r\n"
+        "Connection: close\r\n"
+        "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+}
+
+std::string single_dpi_install_json_from_fields(const std::map<std::string, std::string>& fields) {
+    auto get = [&](const char* key) -> std::string {
+        const auto it = fields.find(key);
+        return it == fields.end() ? "" : it->second;
+    };
+    const std::string content_name = get("content_name").empty()
+        ? "singleDPI DPIv2"
+        : get("content_name");
+
+    return std::string("{\"action\":\"install\",\"url\":\"") +
+        escape_json(get("url").c_str()) +
+        "\",\"content_name\":\"" + escape_json(content_name.c_str()) +
+        "\",\"content_id\":\"" + escape_json(get("content_id").c_str()) +
+        "\",\"playgo_scenario_id\":\"" + escape_json(get("playgo_scenario_id").c_str()) +
+        "\",\"ex_uri\":\"" + escape_json(get("ex_uri").c_str()) +
+        "\",\"icon_url\":\"" + escape_json(get("icon_url").c_str()) + "\"}";
+}
+
+std::string handle_dpi_v2_http_request(const std::string& request, RuntimeState& runtime) {
+    if (request.rfind("OPTIONS ", 0) == 0) {
+        return http_response("OK");
+    }
+    if (request.rfind("GET ", 0) == 0) {
+        return http_response("singleDPI DPI v2 URL endpoint is ready. POST a form field named url.");
+    }
+    if (request.rfind("POST ", 0) != 0) {
+        return http_response("FAILED: Method not allowed", "405 Method Not Allowed");
+    }
+
+    const std::size_t body_start = request.find("\r\n\r\n");
+    if (body_start == std::string::npos) {
+        return http_response("FAILED: Invalid HTTP request", "400 Bad Request");
+    }
+
+    const std::string content_type = http_header_value(request, "Content-Type");
+    const std::string body = request.substr(body_start + 4);
+    std::map<std::string, std::string> fields;
+    if (lowercase_ascii(content_type).find("multipart/form-data") != std::string::npos) {
+        fields = parse_multipart_text_form(body, content_type);
+    } else {
+        fields = parse_urlencoded_form(body);
+    }
+
+    if (fields.find("url") == fields.end() || fields["url"].empty()) {
+        return http_response("FAILED: url field is required", "400 Bad Request");
+    }
+
+    std::string install_json = single_dpi_install_json_from_fields(fields);
+    const std::string appinst_response = handle_request(install_json.data(), runtime);
+
+    json_t response_tokens[kJsonTokens]{};
+    std::string mutable_response = appinst_response;
+    const json_t* response_json = json_create(mutable_response.data(), response_tokens, kJsonTokens);
+    const char* res_text = response_json ? json_getPropertyValue(response_json, "res") : nullptr;
+    const char* content_id = response_json ? json_getPropertyValue(response_json, "content_id") : nullptr;
+    const int res = res_text ? std::atoi(res_text) : -1;
+
+    if (res == 0) {
+        return http_response("SUCCESS: Direct install console Task started for URL: " +
+            fields["url"] + "\n" + "{\"res\":0,\"content_id\":\"" +
+            escape_json(content_id ? content_id : "") +
+            "\",\"dpi_mode\":\"v2_url\"}");
+    }
+    return http_response("FAILED: Install failed with response " + appinst_response);
+}
+
 bool send_all(int socket_fd, const std::string& response) {
     std::size_t sent = 0;
     while (sent < response.size()) {
@@ -588,7 +816,7 @@ bool send_all(int socket_fd, const std::string& response) {
     return true;
 }
 
-int create_server() {
+int create_server(int port = kPort) {
     const int server = socket(AF_INET, SOCK_STREAM, 0);
     if (server < 0) {
         return -1;
@@ -601,7 +829,7 @@ int create_server() {
     sockaddr_in address{};
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_ANY);
-    address.sin_port = htons(kPort);
+    address.sin_port = htons(port);
 
     if (bind(server, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0 ||
         listen(server, 4) < 0) {
@@ -609,6 +837,46 @@ int create_server() {
         return -1;
     }
     return server;
+}
+
+void handle_json_client(int client) {
+    char request[kRequestSize]{};
+    const ssize_t received = recv(client, request, sizeof(request) - 1, 0);
+    if (received > 0) {
+        request[received] = '\0';
+        const std::string response = handle_request(request, g_runtime);
+        send_all(client, response);
+    }
+}
+
+void handle_dpi_v2_client(int client) {
+    std::string request;
+    request.reserve(kDpiV2RequestSize);
+    char buffer[4096];
+    for (;;) {
+        const ssize_t received = recv(client, buffer, sizeof(buffer), 0);
+        if (received <= 0) {
+            break;
+        }
+        request.append(buffer, static_cast<std::size_t>(received));
+        const std::size_t header_end = request.find("\r\n\r\n");
+        if (header_end != std::string::npos) {
+            const std::string content_length_text =
+                http_header_value(request, "Content-Length");
+            const std::size_t content_length = content_length_text.empty()
+                ? 0
+                : static_cast<std::size_t>(std::strtoull(content_length_text.c_str(), nullptr, 10));
+            if (request.size() >= header_end + 4 + content_length) {
+                break;
+            }
+        }
+        if (request.size() >= kDpiV2RequestSize) {
+            break;
+        }
+    }
+
+    const std::string response = handle_dpi_v2_http_request(request, g_runtime);
+    send_all(client, response);
 }
 
 } // namespace
@@ -653,6 +921,14 @@ int main() {
         return 1;
     }
 
+    const int dpi_v2_server = create_server(kDpiV2Port);
+    if (dpi_v2_server < 0) {
+        std::printf("[singleDPI] warning: DPI v2 URL server failed to listen on TCP port %d\n",
+            kDpiV2Port);
+    } else {
+        std::printf("[singleDPI] DPI v2 URL endpoint listening on TCP port %d\n", kDpiV2Port);
+    }
+
     if (is_ready(g_runtime) && g_notification_language == NotificationLanguage::ChineseSimplified) {
         notify("singleDPI %s - 已就绪\n远程 PKG 安装服务\nTCP 端口：%d",
             kVersion, kPort);
@@ -665,27 +941,51 @@ int main() {
     }
 
     for (;;) {
-        sockaddr_in client_address{};
-        socklen_t client_size = sizeof(client_address);
-        const int client = accept(server,
-            reinterpret_cast<sockaddr*>(&client_address), &client_size);
-        if (client < 0) {
+        fd_set read_fds;
+        FD_ZERO(&read_fds);
+        FD_SET(server, &read_fds);
+        int max_fd = server;
+        if (dpi_v2_server >= 0) {
+            FD_SET(dpi_v2_server, &read_fds);
+            if (dpi_v2_server > max_fd) {
+                max_fd = dpi_v2_server;
+            }
+        }
+
+        const int ready = select(max_fd + 1, &read_fds, nullptr, nullptr, nullptr);
+        if (ready < 0) {
             if (errno == EINTR) {
                 continue;
             }
             break;
         }
 
-        char request[kRequestSize]{};
-        const ssize_t received = recv(client, request, sizeof(request) - 1, 0);
-        if (received > 0) {
-            request[received] = '\0';
-            const std::string response = handle_request(request, g_runtime);
-            send_all(client, response);
+        if (FD_ISSET(server, &read_fds)) {
+            sockaddr_in client_address{};
+            socklen_t client_size = sizeof(client_address);
+            const int client = accept(server,
+                reinterpret_cast<sockaddr*>(&client_address), &client_size);
+            if (client >= 0) {
+                handle_json_client(client);
+                close(client);
+            }
         }
-        close(client);
+
+        if (dpi_v2_server >= 0 && FD_ISSET(dpi_v2_server, &read_fds)) {
+            sockaddr_in client_address{};
+            socklen_t client_size = sizeof(client_address);
+            const int client = accept(dpi_v2_server,
+                reinterpret_cast<sockaddr*>(&client_address), &client_size);
+            if (client >= 0) {
+                handle_dpi_v2_client(client);
+                close(client);
+            }
+        }
     }
 
+    if (dpi_v2_server >= 0) {
+        close(dpi_v2_server);
+    }
     close(server);
     cache_icon_server_stop();
     return 0;

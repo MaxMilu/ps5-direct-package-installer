@@ -5,7 +5,8 @@
 ## 功能
 
 一个独立、轻量、单一用途的 PS5 Direct Package Installer payload。它通过 TCP 9090
-接收远程 PKG 安装请求，不加载 etaHEN，也不包含 kstuff。
+接收 DPI v1 JSON 远程 PKG 安装请求，并额外监听实验性的 12800 DPI v2 URL 入口；
+不加载 etaHEN，也不包含 kstuff。
 
 已在 PS5 5.50 上配合兼容的 kstuff/kstuff-lite 完成 PS4 FPKG 安装和启动验证。
 
@@ -80,13 +81,16 @@ TCP 端口：9090
 ```
 
 如果显示 `Not ready`，请根据通知检查 kstuff、Debug AuthID 或 AppInst。服务仍会保留
-9090 端口，客户端可以通过 `ping` 查看详细状态。
+9090 端口，客户端可以通过 `ping` 查看详细状态；如果 12800 端口创建成功，也会同时
+监听实验性的 DPI v2 URL 请求。
 
 ### 客户端配置与安装
 
 1. 打开 PS4 Remote PKG Sender 的配置页面。
 2. 目标程序选择 `PS5 singleDPI`。
-3. 填写 PS5 IP 地址，端口使用 `9090`。
+3. 填写 PS5 IP 地址，并在 `singleDPI Mode` 中选择 `Auto`、`DPI v1` 或 `DPI v2 URL`。
+   `Auto`/`DPI v1` 会显示 9090，`DPI v2 URL` 会显示 12800；客户端内部的
+   `ping`、状态和已安装检测仍固定通过 9090 控制接口完成。
 4. 选择电脑的网络接口和 PKG 目录，然后启动内置 HTTP 服务。
 5. 将 PKG 加入队列并启动自动安装，或直接发送单个条目。
 6. 队列可以选择上一项完成后立即继续，或等待自定义秒数后安装下一项。
@@ -302,9 +306,46 @@ singleDPI 只在关键节点发送通知：
 `content_name` 和 `icon_url` 由系统下载/安装界面使用。singleDPI 自身通知只显示文字，
 不会将远程 `icon_url` 设置成通知图标。
 
+## 高固件兼容性现状与后续路径
+
+当前版本只在 PS5 5.50 上完成真机验证。已有用户反馈：在 11.60 上 `ping` 返回 Ready，
+客户端也显示 PS5 可访问，但开始安装时返回 `-2135813777`。该错误换算为
+`0x80B2116F`，对应 `SCE_PLAYGO_ERROR_CORE_INVALID_SLOT`。相同错误也曾出现在其他固件的
+etaHEN DPI v1 使用场景中，因此目前不能将它判断为 singleDPI 独有问题。
+
+Ready/绿图标只表示 9090 服务、RWX 能力探测、Debug AuthID 和 AppInst 初始化通过，
+并不证明当前固件上的完整 AppInst/PlayGo 安装链路兼容。由于维护者只有 5.50，
+11.60 问题目前无法本地复现，项目也暂不声明支持 11.60。
+
+singleDPI 已增加实验性的 etaHEN DPI v2 URL 兼容入口：HTTP `POST http://PS5_IP:12800/`，
+表单字段使用 `url`，可选 `content_name`、`content_id`、`playgo_scenario_id`、`ex_uri`
+和 `icon_url`。该模式仍会调用同一个 `sceAppInstUtilInstallByPackage`，也仍走远程 URL，
+因此不能假定它一定能修复 11.60 的 `INVALID_SLOT`；更有价值的差异仍是文件上传模式：
+先将完整 PKG 保存到 PS5 本地临时目录，再使用本地路径启动安装。预期修改路径如下：
+
+配套的 PS4 Remote PKG Sender 在选择 `PS5 singleDPI` 时提供 `singleDPI Mode`：
+`Auto`/`DPI v1` 显示 9090，`DPI v2 URL` 显示 12800。安装前会固定通过 9090 `ping`
+读取 `firmware_version` 和 `dpi_v2_url_available`；高固件的 `Auto` 会优先尝试 12800
+DPI v2 URL，低固件会优先尝试 9090 DPI v1。手动选择 v2 时会直接走 12800 URL 入口，
+并在失败后尝试 v1；两个模式都失败时才向用户提示最终错误。
+
+1. 先在 11.60 上用 etaHEN DPI v2 分别测试 URL 安装和文件上传安装，确认是否只有本地
+   文件路径能够绕过 `INVALID_SLOT`。
+2. 如果上传模式有效，为 singleDPI 增加最小化的 PKG 上传、本地暂存、安装和临时文件
+   清理流程；不要求照搬完整的 DPI v2 WebUI。
+3. 为配套客户端增加上传模式。现有 9090 客户端只发送 PKG URL，不会自动使用新通道。
+4. 保留现有 DPI v1 URL 接口，供已验证固件和不希望在 PS5 上暂存完整 PKG 的用户使用。
+5. 增加安装阶段、十进制/十六进制错误码、固件和请求模式等诊断信息，区分连接成功、
+   AppInst 调用失败和异步安装失败。
+
+本地上传需要额外临时空间，大型 PKG 可能在安装期间占用接近一份 PKG 的额外容量。
+上传接口还需要设置文件大小、剩余空间、失败清理和并发限制，并继续只允许在可信局域网使用。
+如果 etaHEN DPI v2 的上传模式在 11.60 上也返回相同错误，则问题更可能位于 AppInst、
+PKG 或对应固件的 kstuff，增加 DPI v2/上传接口本身不会解决。
+
 ## 限制与安全
 
-- 目前只有 9090 TCP API，不包含 DPI v2 WebUI 或 PKG 文件上传。
+- 目前包含 9090 TCP API 和实验性的 12800 DPI v2 URL 入口，不包含 DPI v2 WebUI 或 PKG 文件上传。
 - 服务没有身份认证、访问控制或加密，并监听所有网络接口；只应在可信局域网使用。
 - 元数据由客户端提供，singleDPI 不解析远程 PKG 来校验标题、Content ID 或图标。
 - 图标缓存只主动下载 HTTP PNG，单个文件最大 8 MiB；HTTPS 或校验失败时使用原始 URL。

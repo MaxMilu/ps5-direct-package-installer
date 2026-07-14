@@ -2,8 +2,9 @@
 
 [中文](README.md) | **English**
 
-A lightweight, standalone, single-purpose PS5 Direct Package Installer payload. It accepts
-remote PKG installation requests over TCP port 9090 and does not load etaHEN or include kstuff.
+A lightweight, standalone, single-purpose PS5 Direct Package Installer payload. It accepts DPI v1
+JSON remote PKG installation requests over TCP port 9090 and also listens on the experimental port
+12800 DPI v2 URL entrypoint. It does not load etaHEN or include kstuff.
 
 Tested on PS5 firmware 5.50 with compatible kstuff/kstuff-lite for installing and launching
 PS4 FPKGs.
@@ -74,13 +75,16 @@ TCP port: 9090
 ```
 
 If it displays `Not ready`, check the reported kstuff, Debug AuthID, or AppInst problem. Port
-9090 remains available so the client can request detailed status with `ping`.
+9090 remains available so the client can request detailed status with `ping`; when the 12800
+listener is created successfully, it also accepts experimental DPI v2 URL requests.
 
 ### Client configuration and installation
 
 1. Open the configuration page in PS4 Remote PKG Sender.
 2. Select `PS5 singleDPI` as the target application.
-3. Enter the PS5 IP address and use port `9090`.
+3. Enter the PS5 IP address and choose `Auto`, `DPI v1`, or `DPI v2 URL` in `singleDPI Mode`.
+   `Auto`/`DPI v1` shows port 9090, while `DPI v2 URL` shows port 12800. Internally, the client
+   still uses the 9090 control API for `ping`, status, and installed checks.
 4. Select the computer network interface and PKG directory, then start the built-in HTTP server.
 5. Add PKGs to the queue and start automatic installation, or send a single item directly.
 6. Configure the queue to continue immediately or wait a custom number of seconds between items.
@@ -304,9 +308,57 @@ API field names and error strings remain English for client compatibility.
 `content_name` and `icon_url` are used by the system download and installation UI. singleDPI's
 own notifications are text-only and do not use the remote `icon_url` as their notification icon.
 
+## Higher-firmware compatibility status and planned path
+
+The current release has only been tested on a physical PS5 running firmware 5.50. A user reported
+that on 11.60, `ping` reports Ready and the client marks the PS5 as reachable, but installation
+returns `-2135813777`. This converts to `0x80B2116F`,
+`SCE_PLAYGO_ERROR_CORE_INVALID_SLOT`. The same error has also been reported with etaHEN DPI v1 on
+other firmware versions, so it cannot currently be attributed uniquely to singleDPI.
+
+Ready/the green client indicator only confirms the port 9090 service, the RWX capability probe,
+Debug AuthID, and AppInst initialization. It does not prove that the complete AppInst/PlayGo
+installation path is compatible with the running firmware. The maintainer only has firmware 5.50
+and cannot reproduce the 11.60 failure locally, so the project does not currently claim 11.60
+support.
+
+singleDPI now includes an experimental etaHEN DPI v2 URL-compatible entrypoint:
+HTTP `POST http://PS5_IP:12800/` with the `url` form field and optional `content_name`,
+`content_id`, `playgo_scenario_id`, `ex_uri`, and `icon_url` fields. This mode still calls
+`sceAppInstUtilInstallByPackage` and still uses a remote URL, so it must not be assumed to fix the
+11.60 `INVALID_SLOT` failure by itself. The more relevant difference remains file-upload mode: it
+first stores the complete PKG in a temporary file on the PS5 and then starts installation from that
+local path. The planned investigation and implementation path is:
+
+The companion PS4 Remote PKG Sender provides a `singleDPI Mode` selector when `PS5 singleDPI` is
+selected: `Auto`/`DPI v1` shows port 9090, and `DPI v2 URL` shows port 12800. Before installing,
+it always calls 9090 `ping` to read `firmware_version` and `dpi_v2_url_available`. Higher firmware
+versions in `Auto` prefer the 12800 DPI v2 URL path, while lower firmware versions prefer the 9090
+DPI v1 path. Manually selecting v2 uses the 12800 URL entrypoint first and then falls back to v1 on
+failure; the sender only reports an error to the user after both available modes fail.
+
+1. On firmware 11.60, test etaHEN DPI v2 URL installation and file-upload installation separately
+   to determine whether only the local-file path avoids `INVALID_SLOT`.
+2. If upload mode works, add a minimal PKG upload, local staging, installation, and temporary-file
+   cleanup flow to singleDPI. Reproducing the complete DPI v2 WebUI is not required.
+3. Add upload-mode support to the companion client. Existing port 9090 clients only send a PKG URL
+   and will not automatically use the new path.
+4. Keep the existing DPI v1 URL API for verified firmware and for users who do not want to stage a
+   complete PKG on the PS5.
+5. Improve diagnostics with the installation stage, decimal and hexadecimal error codes, firmware,
+   and request mode, distinguishing connectivity, immediate AppInst-call, and asynchronous
+   installation failures.
+
+Local uploads require temporary storage; large packages may consume close to one additional full
+PKG during installation. The upload endpoint also needs file-size, free-space, failure-cleanup, and
+concurrency limits and must remain restricted to a trusted LAN. If etaHEN DPI v2 upload mode returns
+the same error on 11.60, the likely cause moves back to AppInst, the PKG, or firmware-specific
+kstuff, and adding DPI v2/upload support alone will not solve it.
+
 ## Limitations and security
 
-- Only the port 9090 TCP API is implemented; there is no DPI v2 WebUI or PKG upload endpoint.
+- The port 9090 TCP API and experimental port 12800 DPI v2 URL entrypoint are implemented; there is
+  no DPI v2 WebUI or PKG upload endpoint.
 - The service has no authentication, access control, or encryption and listens on all interfaces.
   Use it only on a trusted LAN.
 - Metadata is supplied by the client. singleDPI does not parse the remote PKG to validate its title,
