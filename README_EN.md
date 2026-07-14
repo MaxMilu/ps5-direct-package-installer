@@ -9,7 +9,10 @@ JSON remote PKG installation requests over TCP port 9090 and also listens on the
 Tested on PS5 firmware 5.50 with compatible kstuff/kstuff-lite for installing and launching
 PS4 FPKGs.
 
-Current version: `0.1.0`
+Current version: `0.2.0`
+
+- Updated the DPI v2 installation method, intended to be compatible with etaHEN's corresponding
+  DPI v2 installation path.
 
 ## Project origin (read first)
 
