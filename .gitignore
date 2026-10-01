@@ -1,3 +1,5 @@
 # Build output
 /bin/*.elf
 /singleDPI.elf
+/artifacts/
+/.build-tmp/

@@ -51,7 +51,7 @@ constexpr int kDpiV2Port = 12800;
 constexpr std::size_t kRequestSize = 16 * 1024;
 constexpr std::size_t kDpiV2RequestSize = 64 * 1024;
 constexpr std::size_t kJsonTokens = 128;
-constexpr const char* kVersion = "0.1.0";
+constexpr const char* kVersion = "0.2.1";
 constexpr const char* kServiceName = "singleDPI";
 constexpr const char* kProcessName = "singleDPI.elf";
 constexpr std::int32_t kSystemServiceParamLanguage = 1;
@@ -102,6 +102,7 @@ struct RuntimeState {
     bool kstuff_available = false;
     bool authid_available = false;
     bool appinst_available = false;
+    bool dpi_v2_url_available = false;
     unsigned long original_authid = 0;
     unsigned long current_authid = 0;
     char last_content_id[kContentIdSize]{};
@@ -328,7 +329,8 @@ std::string capabilities_response(const RuntimeState& runtime) {
         "\"firmware_version\":\"" + escape_json(firmware_version_string().c_str()) + "\"," +
         "\"dpi_v1_port\":" + std::to_string(kPort) + "," +
         "\"dpi_v2_url_port\":" + std::to_string(kDpiV2Port) + "," +
-        "\"dpi_v2_url_available\":true," +
+        "\"dpi_v2_url_available\":" +
+            (runtime.dpi_v2_url_available ? "true" : "false") + "," +
         "\"notification_language\":\"" +
             notification_language_code(g_notification_language) + "\"," +
         "\"ready\":" + (is_ready(runtime) ? "true" : "false") + "," +
@@ -723,12 +725,59 @@ std::string http_header_value(const std::string& request, const std::string& hea
         value_end == std::string::npos ? std::string::npos : value_end - value_start);
 }
 
-std::string http_response(const std::string& body, const char* status = "200 OK") {
+std::string http_response(
+    const std::string& body,
+    const char* status = "200 OK",
+    const char* content_type = "text/plain; charset=utf-8") {
     return std::string("HTTP/1.1 ") + status + "\r\n"
         "Access-Control-Allow-Origin: *\r\n"
-        "Content-Type: text/plain; charset=utf-8\r\n"
+        "Access-Control-Allow-Headers: Content-Type\r\n"
+        "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
+        "Content-Type: " + content_type + "\r\n"
         "Connection: close\r\n"
         "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+}
+
+std::string http_request_target(const std::string& request) {
+    const std::size_t method_end = request.find(' ');
+    if (method_end == std::string::npos) {
+        return "";
+    }
+    const std::size_t target_end = request.find(' ', method_end + 1);
+    if (target_end == std::string::npos) {
+        return "";
+    }
+    return request.substr(method_end + 1, target_end - method_end - 1);
+}
+
+std::map<std::string, std::string> parse_json_fields(std::string body) {
+    std::map<std::string, std::string> fields;
+    json_t tokens[kJsonTokens]{};
+    const json_t* json = json_create(body.data(), tokens, kJsonTokens);
+    if (!json) {
+        return fields;
+    }
+
+    constexpr const char* keys[] = {
+        "action", "url", "content_name", "title", "content_id",
+        "playgo_scenario_id", "ex_uri", "icon_url",
+    };
+    for (const char* key : keys) {
+        const char* value = json_getPropertyValue(json, key);
+        if (value) {
+            fields[key] = value;
+        }
+    }
+    return fields;
+}
+
+std::string json_with_dpi_mode(const std::string& json, const char* mode) {
+    const std::size_t object_end = json.rfind('}');
+    if (object_end == std::string::npos) {
+        return json;
+    }
+    return json.substr(0, object_end) + ",\"dpi_mode\":\"" +
+        escape_json(mode) + "\"}";
 }
 
 std::string single_dpi_install_json_from_fields(const std::map<std::string, std::string>& fields) {
@@ -736,9 +785,13 @@ std::string single_dpi_install_json_from_fields(const std::map<std::string, std:
         const auto it = fields.find(key);
         return it == fields.end() ? "" : it->second;
     };
-    const std::string content_name = get("content_name").empty()
-        ? "singleDPI DPIv2"
-        : get("content_name");
+    std::string content_name = get("content_name");
+    if (content_name.empty()) {
+        content_name = get("title");
+    }
+    if (content_name.empty()) {
+        content_name = "singleDPI DPIv2";
+    }
 
     return std::string("{\"action\":\"install\",\"url\":\"") +
         escape_json(get("url").c_str()) +
@@ -753,7 +806,28 @@ std::string handle_dpi_v2_http_request(const std::string& request, RuntimeState&
     if (request.rfind("OPTIONS ", 0) == 0) {
         return http_response("OK");
     }
+    const std::string target = http_request_target(request);
+    const std::size_t query_start = target.find('?');
+    const std::string path = target.substr(0, query_start);
+    const std::map<std::string, std::string> query = query_start == std::string::npos
+        ? std::map<std::string, std::string>{}
+        : parse_urlencoded_form(target.substr(query_start + 1));
+
     if (request.rfind("GET ", 0) == 0) {
+        if (path == "/ping" || path == "/api/ping") {
+            return http_response(capabilities_response(runtime), "200 OK", "application/json");
+        }
+        if (path == "/status" || path == "/api/status") {
+            const auto content_id = query.find("content_id");
+            std::string status_json = "{\"action\":\"status\"";
+            if (content_id != query.end()) {
+                status_json += ",\"content_id\":\"" +
+                    escape_json(content_id->second.c_str()) + "\"";
+            }
+            status_json += "}";
+            return http_response(handle_request(status_json.data(), runtime),
+                "200 OK", "application/json");
+        }
         return http_response("singleDPI DPI v2 URL endpoint is ready. POST a form field named url.");
     }
     if (request.rfind("POST ", 0) != 0) {
@@ -768,10 +842,24 @@ std::string handle_dpi_v2_http_request(const std::string& request, RuntimeState&
     const std::string content_type = http_header_value(request, "Content-Type");
     const std::string body = request.substr(body_start + 4);
     std::map<std::string, std::string> fields;
-    if (lowercase_ascii(content_type).find("multipart/form-data") != std::string::npos) {
+    const std::string lower_content_type = lowercase_ascii(content_type);
+    if (lower_content_type.find("application/json") != std::string::npos) {
+        fields = parse_json_fields(body);
+    } else if (lower_content_type.find("multipart/form-data") != std::string::npos) {
         fields = parse_multipart_text_form(body, content_type);
     } else {
         fields = parse_urlencoded_form(body);
+    }
+
+    if (path == "/status" || path == "/api/status" || fields["action"] == "status") {
+        std::string status_json = "{\"action\":\"status\"";
+        if (!fields["content_id"].empty()) {
+            status_json += ",\"content_id\":\"" +
+                escape_json(fields["content_id"].c_str()) + "\"";
+        }
+        status_json += "}";
+        return http_response(handle_request(status_json.data(), runtime),
+            "200 OK", "application/json");
     }
 
     if (fields.find("url") == fields.end() || fields["url"].empty()) {
@@ -785,14 +873,11 @@ std::string handle_dpi_v2_http_request(const std::string& request, RuntimeState&
     std::string mutable_response = appinst_response;
     const json_t* response_json = json_create(mutable_response.data(), response_tokens, kJsonTokens);
     const char* res_text = response_json ? json_getPropertyValue(response_json, "res") : nullptr;
-    const char* content_id = response_json ? json_getPropertyValue(response_json, "content_id") : nullptr;
     const int res = res_text ? std::atoi(res_text) : -1;
 
     if (res == 0) {
         return http_response("SUCCESS: Direct install console Task started for URL: " +
-            fields["url"] + "\n" + "{\"res\":0,\"content_id\":\"" +
-            escape_json(content_id ? content_id : "") +
-            "\",\"dpi_mode\":\"v2_url\"}");
+            fields["url"] + "\n" + json_with_dpi_mode(appinst_response, "v2_url"));
     }
     return http_response("FAILED: Install failed with response " + appinst_response);
 }
@@ -922,6 +1007,7 @@ int main() {
     }
 
     const int dpi_v2_server = create_server(kDpiV2Port);
+    g_runtime.dpi_v2_url_available = dpi_v2_server >= 0;
     if (dpi_v2_server < 0) {
         std::printf("[singleDPI] warning: DPI v2 URL server failed to listen on TCP port %d\n",
             kDpiV2Port);

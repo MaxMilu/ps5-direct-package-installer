@@ -1,20 +1,27 @@
-# PS5 Direct Package Installer (singleDPI)
+# 📦 PS5 Direct Package Installer (singleDPI)
 
 [中文](README.md) | **English**
 
 A lightweight, standalone, single-purpose PS5 Direct Package Installer payload. It accepts DPI v1
-JSON remote PKG installation requests over TCP port 9090 and also listens on the experimental port
-12800 DPI v2 URL entrypoint. It does not load etaHEN or include kstuff.
+JSON remote PKG installation requests over TCP port 9090 and also listens on port 12800 for DPI v2
+URL and status requests. It does not load etaHEN or include kstuff.
 
 Tested on PS5 firmware 5.50 with compatible kstuff/kstuff-lite for installing and launching
 PS4 FPKGs.
 
-Current version: `0.2.0`
+Current version: `0.2.1`
 
-- Updated the DPI v2 installation method, intended to be compatible with etaHEN's corresponding
-  DPI v2 installation path.
+### 🆕 0.2.1 changes
 
-## Project origin (read first)
+- Improved DPI v2 form and JSON request compatibility.
+- Added `/ping` and `/status` queries on port 12800.
+- Unified V1/V2 installation metadata, icons, notifications, and progress state.
+- Added a one-command Windows + WSL2 build script.
+
+- DPI v2 URL mode accepts etaHEN-compatible forms and shares DPI v1 title, icon, notification,
+  and installation-progress handling.
+
+## 📚 Project origin (read first)
 
 This project is an independently packaged and modified derivative of the Direct Package Installer
 implementation and AppInst structure definitions from
@@ -28,7 +35,7 @@ The standalone payload, TCP protocol extensions, runtime capability checks, stat
 documentation were modified by MaxMilu in 2026. This is an unofficial derivative project, not an
 official etaHEN release. Problems specific to this project should not be attributed to etaHEN.
 
-## License
+## ⚖️ License
 
 The derivative work is released under the **GNU GPL version 3 or any later version**. The root
 [LICENSE](LICENSE) contains the complete GPL v3 text matching etaHEN's license version, while
@@ -39,7 +46,7 @@ by the GPL.
 `third_party/tiny-json` is a separate MIT-licensed component. Its original copyright and license
 are preserved in [`third_party/tiny-json/LICENSE`](third_party/tiny-json/LICENSE).
 
-## AI-assisted development disclosure
+## 🤖 AI-assisted development disclosure
 
 AI-assisted coding tools, including OpenAI Codex, were used for parts of the code analysis,
 refactoring, debugging, and documentation. These tools served only as development assistance and
@@ -47,9 +54,9 @@ are not authors or copyright holders of this project. Every merged change is rev
 project maintainer and verified through compilation or console testing where applicable. The
 project maintainer remains responsible for the final code, releases, and maintenance.
 
-## Client and usage
+## 🚀 Client and usage
 
-### Requirements
+### ✅ Requirements
 
 - An exploit and ELF Loader compatible with the PS5 firmware.
 - kstuff, kstuff-lite, or a compatible implementation matching the firmware.
@@ -58,7 +65,7 @@ project maintainer remains responsible for the final code, releases, and mainten
   [PS4 Remote PKG Sender](https://github.com/MaxMilu/ps4-remote-pkg-sender/tree/codex/singledpi-support).
 - The PS5 and computer on the same trusted LAN, with PKG URLs reachable from the PS5.
 
-### PS5 load order
+### 🔌 PS5 load order
 
 Load components in this exact order:
 
@@ -72,22 +79,23 @@ Exploit / ELF Loader
 The payload reads the PS5 system language before displaying notifications. English example:
 
 ```text
-singleDPI 0.1.0 - Ready
+singleDPI 0.2.1 - Ready
 Direct Package Installer
 TCP port: 9090
 ```
 
 If it displays `Not ready`, check the reported kstuff, Debug AuthID, or AppInst problem. Port
 9090 remains available so the client can request detailed status with `ping`; when the 12800
-listener is created successfully, it also accepts experimental DPI v2 URL requests.
+listener is created successfully, it also accepts DPI v2 URL and status requests.
 
-### Client configuration and installation
+### 🖥️ Client configuration and installation
 
 1. Open the configuration page in PS4 Remote PKG Sender.
 2. Select `PS5 singleDPI` as the target application.
 3. Enter the PS5 IP address and choose `Auto`, `DPI v1`, or `DPI v2 URL` in `singleDPI Mode`.
    `Auto`/`DPI v1` shows port 9090, while `DPI v2 URL` shows port 12800. Internally, the client
-   still uses the 9090 control API for `ping`, status, and installed checks.
+   can keep using the 9090 control API for `ping`, status, and installed checks; V2 installation
+   progress is also available directly from `/status` on port 12800.
 4. Select the computer network interface and PKG directory, then start the built-in HTTP server.
 5. Add PKGs to the queue and start automatic installation, or send a single item directly.
 6. Configure the queue to continue immediately or wait a custom number of seconds between items.
@@ -98,7 +106,7 @@ Games and updates must still satisfy the version requirements of the PS4 compati
 on the PS5. Newer PS4 FPKGs may require a Backport patch matching the Base, update version, and
 Title ID. Otherwise, installation may succeed while the game still fails to launch.
 
-### Manual calls without the client
+### 🧰 Manual calls without the client
 
 Check the service:
 
@@ -124,10 +132,17 @@ Query progress:
 {"action":"status","content_id":"UP0000-CUSA00000_00-XXXXXXXXXXXXXXXX"}
 ```
 
-## Build
+## 🛠️ Build
 
-On Windows 11, use WSL2 Ubuntu with the PS5 Payload SDK installed at
-`/opt/ps5-payload-sdk`:
+On Windows 11, install the PS5 Payload SDK in WSL2 Ubuntu at
+`/opt/ps5-payload-sdk`, then run the included PowerShell build script:
+
+```powershell
+.\build_by_wsl2_ubuntu.ps1
+```
+
+The script archives the source into WSL, builds it with the SDK, and writes the versioned ELF
+to `artifacts/<branch>/`. Manual building is also supported:
 
 ```bash
 rm -rf "$HOME/ps5-direct-package-installer"
@@ -153,7 +168,7 @@ cp bin/singleDPI.elf /mnt/d/Dev/git/singleDPI/bin/
 The Makefile uses the SDK-provided `SceNet`, `SceSystemService`, `SceAppInstUtil`, and
 `kernel_sys` stub libraries. The etaHEN source tree is not required.
 
-## Features
+## 🧩 Features
 
 - TCP port 9090 JSON API.
 - Compatibility with etaHEN's simple `{ "url": "..." }` request.
@@ -169,19 +184,19 @@ The Makefile uses the SDK-provided `SceNet`, `SceSystemService`, `SceAppInstUtil
   and an English fallback.
 - No runtime or build dependency on etaHEN source, processes, or stub libraries.
 
-## API reference
+## 📡 API reference
 
 Each request uses one TCP connection. Connect to port 9090 on the PS5, send one complete JSON
 document, read one JSON response, and let the server close the connection. A request cannot exceed
 16 KiB.
 
-### `ping`
+### 🔎 `ping`
 
 ```json
 {
   "res": 0,
   "service": "singleDPI",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "notification_language": "en",
   "ready": true,
   "message": "ready to install packages",
@@ -196,7 +211,7 @@ document, read one JSON response, and let the server close the connection. A req
 
 Before installing, confirm that `ready` and all three `*_available` fields are `true`.
 
-### `install`
+### 📥 `install`
 
 Only `url` is required:
 
@@ -225,7 +240,7 @@ When `action` is omitted, the request is treated as `install` for etaHEN DPI com
 {"url":"http://192.168.1.10/game.pkg"}
 ```
 
-### `status`
+### 📊 `status`
 
 Omit `content_id` to query the most recent task:
 
@@ -237,7 +252,7 @@ The response includes `status`, `downloaded_size`, `total_size`, `progress`,
 `promote_progress`, `remain_time`, `local_copy_percent`, and AppInst error fields. The system
 AppInst service performs the task independently; singleDPI only remembers the latest Content ID.
 
-### `is_installed`
+### ✅ `is_installed`
 
 Check PS5 installation records using the SFO `CATEGORY`, `TITLE_ID`, and `CONTENT_ID`:
 
@@ -261,7 +276,7 @@ The `exists` response field reports whether the target JSON exists. Diagnostic f
 `error_description`. This API checks record paths only; it does not compare installed versions or
 PKG digests.
 
-### `cache_info` and `cache_clear`
+### 🗂️ `cache_info` and `cache_clear`
 
 ```json
 {"action":"cache_info"}
@@ -276,7 +291,7 @@ Returns the cache directory, file list, file count, and total size. Clear the ca
 `cache_clear` returns the number of bytes freed and only removes files matching singleDPI's icon
 cache naming convention.
 
-### Error codes
+### ⚠️ Error codes
 
 | `res` | Meaning |
 | ---: | --- |
@@ -294,7 +309,7 @@ cache naming convention.
 
 Non-zero errors returned by AppInst itself are passed through in `res`.
 
-## PS5 notifications
+## 🔔 PS5 notifications
 
 singleDPI only sends notifications at important transitions:
 
@@ -311,7 +326,7 @@ API field names and error strings remain English for client compatibility.
 `content_name` and `icon_url` are used by the system download and installation UI. singleDPI's
 own notifications are text-only and do not use the remote `icon_url` as their notification icon.
 
-## Higher-firmware compatibility status and planned path
+## 🧪 Higher-firmware compatibility status and planned path
 
 The current release has only been tested on a physical PS5 running firmware 5.50. A user reported
 that on 11.60, `ping` reports Ready and the client marks the PS5 as reachable, but installation
@@ -325,9 +340,15 @@ installation path is compatible with the running firmware. The maintainer only h
 and cannot reproduce the 11.60 failure locally, so the project does not currently claim 11.60
 support.
 
-singleDPI now includes an experimental etaHEN DPI v2 URL-compatible entrypoint:
-HTTP `POST http://PS5_IP:12800/` with the `url` form field and optional `content_name`,
-`content_id`, `playgo_scenario_id`, `ex_uri`, and `icon_url` fields. This mode still calls
+singleDPI includes an etaHEN DPI v2 URL-compatible entrypoint at
+`POST http://PS5_IP:12800/` or `POST http://PS5_IP:12800/upload`. It accepts etaHEN's form format
+and JSON with the same fields as DPI v1. `url` is required; optional fields are `content_name`
+(or `title`), `content_id`, `playgo_scenario_id`, `ex_uri`, and `icon_url`. V2 and V1 share the
+same installation function, title metadata, icon cache, start/failure notifications, and latest
+task state, so the system download UI receives the same title and icon behavior. Use
+`GET /status?content_id=...` (omit the Content ID for the latest task) to retrieve the same
+download, copy, Promote, and error fields as the port 9090 `status` action. `GET /ping` returns
+capabilities. This mode still calls
 `sceAppInstUtilInstallByPackage` and still uses a remote URL, so it must not be assumed to fix the
 11.60 `INVALID_SLOT` failure by itself. The more relevant difference remains file-upload mode: it
 first stores the complete PKG in a temporary file on the PS5 and then starts installation from that
@@ -335,7 +356,7 @@ local path. The planned investigation and implementation path is:
 
 The companion PS4 Remote PKG Sender provides a `singleDPI Mode` selector when `PS5 singleDPI` is
 selected: `Auto`/`DPI v1` shows port 9090, and `DPI v2 URL` shows port 12800. Before installing,
-it always calls 9090 `ping` to read `firmware_version` and `dpi_v2_url_available`. Higher firmware
+it can use 9090 `ping` or 12800 `/ping` to read `firmware_version` and `dpi_v2_url_available`. Higher firmware
 versions in `Auto` prefer the 12800 DPI v2 URL path, while lower firmware versions prefer the 9090
 DPI v1 path. Manually selecting v2 uses the 12800 URL entrypoint first and then falls back to v1 on
 failure; the sender only reports an error to the user after both available modes fail.
@@ -358,9 +379,9 @@ concurrency limits and must remain restricted to a trusted LAN. If etaHEN DPI v2
 the same error on 11.60, the likely cause moves back to AppInst, the PKG, or firmware-specific
 kstuff, and adding DPI v2/upload support alone will not solve it.
 
-## Limitations and security
+## 🔒 Limitations and security
 
-- The port 9090 TCP API and experimental port 12800 DPI v2 URL entrypoint are implemented; there is
+- The port 9090 TCP API and port 12800 DPI v2 URL/status entrypoints are implemented; there is
   no DPI v2 WebUI or PKG upload endpoint.
 - The service has no authentication, access control, or encryption and listens on all interfaces.
   Use it only on a trusted LAN.
@@ -378,7 +399,7 @@ kstuff, and adding DPI v2/upload support alone will not solve it.
 - Capability detection does not replace firmware matching. Incorrect kstuff versions can still
   cause installation or launch failures.
 
-## Project name
+## ℹ️ Project name
 
 `singleDPI` remains the ELF filename and API `service` identifier for compatibility with existing
 clients. The repository and public project name are **PS5 Direct Package Installer**, with the full
