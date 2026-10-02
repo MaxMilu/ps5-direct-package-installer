@@ -12,6 +12,10 @@ SOURCES := source/main.cpp source/cache.cpp third_party/tiny-json/tiny-json.cpp
 
 CXXFLAGS := -std=c++20 -O2 -Wall -Wextra -Wpedantic \
 	-Iinclude -Ithird_party/tiny-json
+
+ifeq ($(DEBUG),1)
+    CXXFLAGS += -DSINGLEDPI_DEBUG_LOG
+endif
 LDADD := -lSceNet -lSceSystemService -lSceAppInstUtil -lkernel_sys
 
 .PHONY: all clean test

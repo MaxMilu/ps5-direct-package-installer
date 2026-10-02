@@ -10,10 +10,13 @@
 
 已在 PS5 5.50 上配合兼容的 kstuff/kstuff-lite 完成 PS4 FPKG 安装和启动验证。
 
-当前版本：`0.2.1`
+当前版本：`0.2.2`
 
-### 🆕 0.2.1 更新内容
+### 🆕 0.2.2 更新内容
 
+- 使用支持 PS5 13.60 的 PS5 Payload SDK v0.43 重新构建。
+- 提供普通版和可选的 debug-log 构建；debug-log 版本用于收集高版本系统的启动阶段和 panic 信息。
+- debug-log 日志路径为 `/data/singleDPI/singleDPI-debug.log`。
 - 完善 DPI v2 URL 的表单与 JSON 请求兼容性。
 - 增加 12800 端口的 `/ping`、`/status` 查询接口。
 - 统一 V1/V2 的安装元数据、图标、通知和进度状态。
@@ -84,7 +87,7 @@ Exploit / ELF Loader
 成功后会读取 PS5 系统语言并显示对应通知。简体中文示例：
 
 ```text
-singleDPI 0.2.1 - 已就绪
+singleDPI 0.2.2 - 已就绪
 远程 PKG 安装服务
 TCP 端口：9090
 ```
@@ -137,8 +140,8 @@ TCP 端口：9090
 
 ## 🛠️ 编译
 
-推荐在 Windows 11 上使用 WSL2 Ubuntu，并将 PS5 Payload SDK 安装到
-`/opt/ps5-payload-sdk`。可以直接运行项目中的 PowerShell 构建脚本：
+推荐在 Windows 11 上使用 WSL2 Ubuntu，并使用支持 PS5 13.60 的 PS5 Payload SDK v0.43，
+安装到 `/opt/ps5-payload-sdk`。可以直接运行项目中的 PowerShell 构建脚本：
 
 ```powershell
 .\build_by_wsl2_ubuntu.ps1
@@ -155,6 +158,9 @@ export PS5_PAYLOAD_SDK=/opt/ps5-payload-sdk
 make clean
 make -j"$(nproc)"
 ```
+
+如需编译 debug-log 版本，在 `make` 命令中加入 `DEBUG=1`；日志写入
+`/data/singleDPI/singleDPI-debug.log`。
 
 输出文件：
 
@@ -197,7 +203,7 @@ JSON 响应，然后由服务端关闭连接。单个请求不能超过 16 KiB�
 {
   "res": 0,
   "service": "singleDPI",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "notification_language": "zh-Hans",
   "ready": true,
   "message": "ready to install packages",

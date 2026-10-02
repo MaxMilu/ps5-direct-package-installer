@@ -9,10 +9,13 @@ URL and status requests. It does not load etaHEN or include kstuff.
 Tested on PS5 firmware 5.50 with compatible kstuff/kstuff-lite for installing and launching
 PS4 FPKGs.
 
-Current version: `0.2.1`
+Current version: `0.2.2`
 
-### 🆕 0.2.1 changes
+### 🆕 0.2.2 changes
 
+- Rebuilt with PS5 Payload SDK v0.43, which includes PS5 13.60 support.
+- Provides a normal build and an optional debug-log build for collecting startup-stage and panic information on higher firmware.
+- The debug-log build writes to `/data/singleDPI/singleDPI-debug.log`.
 - Improved DPI v2 form and JSON request compatibility.
 - Added `/ping` and `/status` queries on port 12800.
 - Unified V1/V2 installation metadata, icons, notifications, and progress state.
@@ -79,7 +82,7 @@ Exploit / ELF Loader
 The payload reads the PS5 system language before displaying notifications. English example:
 
 ```text
-singleDPI 0.2.1 - Ready
+singleDPI 0.2.2 - Ready
 Direct Package Installer
 TCP port: 9090
 ```
@@ -134,7 +137,7 @@ Query progress:
 
 ## 🛠️ Build
 
-On Windows 11, install the PS5 Payload SDK in WSL2 Ubuntu at
+On Windows 11, install PS5 Payload SDK v0.43, which supports PS5 13.60, in WSL2 Ubuntu at
 `/opt/ps5-payload-sdk`, then run the included PowerShell build script:
 
 ```powershell
@@ -152,6 +155,9 @@ export PS5_PAYLOAD_SDK=/opt/ps5-payload-sdk
 make clean
 make -j"$(nproc)"
 ```
+
+To build the debug-log variant, add `DEBUG=1` to the `make` command. It writes the log to
+`/data/singleDPI/singleDPI-debug.log`.
 
 Output:
 
@@ -196,7 +202,7 @@ document, read one JSON response, and let the server close the connection. A req
 {
   "res": 0,
   "service": "singleDPI",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "notification_language": "en",
   "ready": true,
   "message": "ready to install packages",

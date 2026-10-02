@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <map>
 #include <netinet/in.h>
 #include <signal.h>
@@ -51,7 +52,7 @@ constexpr int kDpiV2Port = 12800;
 constexpr std::size_t kRequestSize = 16 * 1024;
 constexpr std::size_t kDpiV2RequestSize = 64 * 1024;
 constexpr std::size_t kJsonTokens = 128;
-constexpr const char* kVersion = "0.2.1";
+constexpr const char* kVersion = "0.2.2";
 constexpr const char* kServiceName = "singleDPI";
 constexpr const char* kProcessName = "singleDPI.elf";
 constexpr std::int32_t kSystemServiceParamLanguage = 1;
@@ -59,6 +60,168 @@ constexpr std::int32_t kLanguageChineseTraditional = 10;
 constexpr std::int32_t kLanguageChineseSimplified = 11;
 constexpr int kDebugAuthIdProbeProtection = PROT_READ | PROT_WRITE | PROT_EXEC;
 constexpr unsigned long kDebugAuthId = 0x4800000000000006UL;
+#ifdef SINGLEDPI_DEBUG_LOG
+constexpr const char* kDebugLogPath = "/data/singleDPI/singleDPI-debug.log";
+#endif
+
+// This logger deliberately avoids std::string, malloc, networking, and AppInst.
+// It is intended to remain usable while diagnosing an early startup crash.
+enum class StartupStage : int {
+    ProcessStarted,
+    BeforeCacheInit,
+    AfterCacheInit,
+    BeforeLanguage,
+    AfterLanguage,
+    BeforeKstuffProbe,
+    AfterKstuffProbe,
+    BeforeAuthId,
+    AfterAuthId,
+    BeforeAppInst,
+    AfterAppInst,
+    BeforePort9090,
+    AfterPort9090,
+    BeforePort12800,
+    AfterPort12800,
+    Serving,
+};
+
+#ifdef SINGLEDPI_DEBUG_LOG
+
+volatile sig_atomic_t g_startup_stage = static_cast<sig_atomic_t>(StartupStage::ProcessStarted);
+
+const char* startup_stage_name(sig_atomic_t stage) {
+    switch (static_cast<StartupStage>(stage)) {
+    case StartupStage::ProcessStarted: return "process_started";
+    case StartupStage::BeforeCacheInit: return "before_cache_init";
+    case StartupStage::AfterCacheInit: return "after_cache_init";
+    case StartupStage::BeforeLanguage: return "before_language";
+    case StartupStage::AfterLanguage: return "after_language";
+    case StartupStage::BeforeKstuffProbe: return "before_kstuff_probe";
+    case StartupStage::AfterKstuffProbe: return "after_kstuff_probe";
+    case StartupStage::BeforeAuthId: return "before_authid";
+    case StartupStage::AfterAuthId: return "after_authid";
+    case StartupStage::BeforeAppInst: return "before_appinst";
+    case StartupStage::AfterAppInst: return "after_appinst";
+    case StartupStage::BeforePort9090: return "before_port_9090";
+    case StartupStage::AfterPort9090: return "after_port_9090";
+    case StartupStage::BeforePort12800: return "before_port_12800";
+    case StartupStage::AfterPort12800: return "after_port_12800";
+    case StartupStage::Serving: return "serving";
+    }
+    return "unknown";
+}
+
+void set_startup_stage(StartupStage stage) {
+    g_startup_stage = static_cast<sig_atomic_t>(stage);
+}
+
+std::size_t append_text(char* output, std::size_t offset, std::size_t capacity,
+    const char* text) {
+    if (!text || offset >= capacity) return offset;
+    while (*text && offset + 1 < capacity) output[offset++] = *text++;
+    output[offset] = '\0';
+    return offset;
+}
+
+std::size_t append_unsigned(char* output, std::size_t offset, std::size_t capacity,
+    unsigned long long value, unsigned base) {
+    char digits[32];
+    std::size_t count = 0;
+    do {
+        const unsigned digit = static_cast<unsigned>(value % base);
+        digits[count++] = static_cast<char>(digit < 10 ? '0' + digit : 'a' + digit - 10);
+        value /= base;
+    } while (value != 0 && count < sizeof(digits));
+    while (count > 0 && offset + 1 < capacity) output[offset++] = digits[--count];
+    if (offset < capacity) output[offset] = '\0';
+    return offset;
+}
+
+std::size_t append_signed(char* output, std::size_t offset, std::size_t capacity, long value) {
+    if (value < 0) {
+        offset = append_text(output, offset, capacity, "-");
+        return append_unsigned(output, offset, capacity,
+            static_cast<unsigned long long>(-(value + 1)) + 1, 10);
+    }
+    return append_unsigned(output, offset, capacity, static_cast<unsigned long long>(value), 10);
+}
+
+void debug_log_raw(const char* text, std::size_t size) {
+    const int fd = open(kDebugLogPath, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd < 0) return;
+    std::size_t written = 0;
+    while (written < size) {
+        const ssize_t result = write(fd, text + written, size - written);
+        if (result < 0 && errno == EINTR) continue;
+        if (result <= 0) break;
+        written += static_cast<std::size_t>(result);
+    }
+    fsync(fd);
+    close(fd);
+}
+
+void debug_log(const char* event) {
+    char line[256]{};
+    std::size_t length = append_text(line, 0, sizeof(line), event);
+    length = append_text(line, length, sizeof(line), " stage=");
+    length = append_text(line, length, sizeof(line), startup_stage_name(g_startup_stage));
+    length = append_text(line, length, sizeof(line), "\n");
+    debug_log_raw(line, length);
+}
+
+void debug_log_result(const char* event, long result, int error_number = 0) {
+    char line[256]{};
+    std::size_t length = append_text(line, 0, sizeof(line), event);
+    length = append_text(line, length, sizeof(line), " result=");
+    length = append_signed(line, length, sizeof(line), result);
+    length = append_text(line, length, sizeof(line), " errno=");
+    length = append_signed(line, length, sizeof(line), error_number);
+    length = append_text(line, length, sizeof(line), " stage=");
+    length = append_text(line, length, sizeof(line), startup_stage_name(g_startup_stage));
+    length = append_text(line, length, sizeof(line), "\n");
+    debug_log_raw(line, length);
+}
+
+void debug_panic_handler(int signal_number, siginfo_t* signal_info, void* context) {
+    char line[512]{};
+    std::size_t length = append_text(line, 0, sizeof(line), "PANIC signal=");
+    length = append_signed(line, length, sizeof(line), signal_number);
+    length = append_text(line, length, sizeof(line), " code=");
+    length = append_signed(line, length, sizeof(line), signal_info ? signal_info->si_code : 0);
+    length = append_text(line, length, sizeof(line), " errno=");
+    length = append_signed(line, length, sizeof(line), signal_info ? signal_info->si_errno : 0);
+    length = append_text(line, length, sizeof(line), " address=0x");
+    length = append_unsigned(line, length, sizeof(line),
+        reinterpret_cast<unsigned long long>(signal_info ? signal_info->si_addr : nullptr), 16);
+    length = append_text(line, length, sizeof(line), " context=0x");
+    length = append_unsigned(line, length, sizeof(line),
+        reinterpret_cast<unsigned long long>(context), 16);
+    length = append_text(line, length, sizeof(line), " stage=");
+    length = append_text(line, length, sizeof(line), startup_stage_name(g_startup_stage));
+    length = append_text(line, length, sizeof(line), "\n");
+    debug_log_raw(line, length);
+    _exit(128 + signal_number);
+}
+
+void install_debug_panic_handlers() {
+    const int signals[] = {SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGFPE, SIGSYS, SIGTRAP};
+    struct sigaction action{};
+    sigemptyset(&action.sa_mask);
+    action.sa_sigaction = debug_panic_handler;
+    action.sa_flags = SA_SIGINFO | SA_RESETHAND;
+    for (const int signal_number : signals) {
+        sigaction(signal_number, &action, nullptr);
+    }
+}
+
+#else
+
+void set_startup_stage(StartupStage) {}
+void debug_log(const char*) {}
+void debug_log_result(const char*, long, int = 0) {}
+void install_debug_panic_handlers() {}
+
+#endif
 
 enum class ApiError : int {
     KstuffUnavailable = -1,
@@ -209,6 +372,7 @@ bool probe_required_rwx_capability() {
     void* page = mmap(nullptr, static_cast<std::size_t>(page_size),
         PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (page == MAP_FAILED) {
+        debug_log_result("mmap_probe", -1, errno);
         return false;
     }
 
@@ -218,21 +382,26 @@ bool probe_required_rwx_capability() {
         sceKernelMprotect(page, static_cast<std::size_t>(page_size), PROT_READ | PROT_WRITE);
     }
     munmap(page, static_cast<std::size_t>(page_size));
+    debug_log_result("mprotect_probe", result);
     return result == 0;
 }
 
 bool prepare_appinst_authid(RuntimeState& runtime) {
     runtime.original_authid = kernel_get_ucred_authid(getpid());
     if (runtime.original_authid == 0) {
+        debug_log_result("get_original_authid", -1);
         return false;
     }
 
     if (runtime.original_authid != kDebugAuthId &&
         kernel_set_ucred_authid(getpid(), kDebugAuthId) != 0) {
+        debug_log_result("set_debug_authid", -1);
         return false;
     }
 
     runtime.current_authid = kernel_get_ucred_authid(getpid());
+    debug_log_result("verify_debug_authid",
+        runtime.current_authid == kDebugAuthId ? 0 : -1);
     return runtime.current_authid == kDebugAuthId;
 }
 
@@ -242,12 +411,21 @@ PlayGoInfo make_playgo_info() {
 }
 
 void initialize_runtime(RuntimeState& runtime) {
+    set_startup_stage(StartupStage::BeforeKstuffProbe);
     runtime.kstuff_available = probe_required_rwx_capability();
+    set_startup_stage(StartupStage::AfterKstuffProbe);
+    debug_log_result("kstuff_probe", runtime.kstuff_available ? 0 : -1);
     if (runtime.kstuff_available) {
+        set_startup_stage(StartupStage::BeforeAuthId);
         runtime.authid_available = prepare_appinst_authid(runtime);
+        set_startup_stage(StartupStage::AfterAuthId);
+        debug_log_result("authid_prepare", runtime.authid_available ? 0 : -1);
     }
     if (runtime.authid_available) {
+        set_startup_stage(StartupStage::BeforeAppInst);
         runtime.appinst_available = sceAppInstUtilInitialize() == 0;
+        set_startup_stage(StartupStage::AfterAppInst);
+        debug_log_result("appinst_initialize", runtime.appinst_available ? 0 : -1);
     }
 }
 
@@ -904,6 +1082,7 @@ bool send_all(int socket_fd, const std::string& response) {
 int create_server(int port = kPort) {
     const int server = socket(AF_INET, SOCK_STREAM, 0);
     if (server < 0) {
+        debug_log_result(port == kPort ? "socket_9090" : "socket_12800", -1, errno);
         return -1;
     }
 
@@ -918,9 +1097,12 @@ int create_server(int port = kPort) {
 
     if (bind(server, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0 ||
         listen(server, 4) < 0) {
+        const int error_number = errno;
+        debug_log_result(port == kPort ? "listen_9090" : "listen_12800", -1, error_number);
         close(server);
         return -1;
     }
+    debug_log_result(port == kPort ? "listen_9090" : "listen_12800", server, 0);
     return server;
 }
 
@@ -969,14 +1151,30 @@ void handle_dpi_v2_client(int client) {
 int main() {
     signal(SIGPIPE, SIG_IGN);
 
+    // Create the log directory before any code which may depend on it.
+    mkdir("/data/singleDPI", 0755);
+    install_debug_panic_handlers();
+    debug_log("BEGIN singleDPI debug build");
+
     syscall(SYS_thr_set_name, -1, kProcessName);
 
+    set_startup_stage(StartupStage::BeforeCacheInit);
+    debug_log("before_cache_init");
     cache_init_dirs();
+    set_startup_stage(StartupStage::AfterCacheInit);
+    debug_log("after_cache_init");
     if (!cache_icon_server_start()) {
+        debug_log("icon_cache_server_failed");
         std::printf("[singleDPI] warning: icon cache server failed to start\n");
+    } else {
+        debug_log("icon_cache_server_started");
     }
 
+    set_startup_stage(StartupStage::BeforeLanguage);
+    debug_log("before_language");
     g_notification_language = detect_notification_language();
+    set_startup_stage(StartupStage::AfterLanguage);
+    debug_log("after_language");
     initialize_runtime(g_runtime);
 
     // Keep the diagnostic API available even when package installation is not ready.
@@ -993,7 +1191,10 @@ int main() {
         }
     }
 
+    set_startup_stage(StartupStage::BeforePort9090);
+    debug_log("before_port_9090");
     const int server = create_server();
+    set_startup_stage(StartupStage::AfterPort9090);
     if (server < 0) {
         if (g_notification_language == NotificationLanguage::ChineseSimplified) {
             notify("singleDPI - 启动失败\n无法监听 TCP 端口 %d", kPort);
@@ -1006,7 +1207,10 @@ int main() {
         return 1;
     }
 
+    set_startup_stage(StartupStage::BeforePort12800);
+    debug_log("before_port_12800");
     const int dpi_v2_server = create_server(kDpiV2Port);
+    set_startup_stage(StartupStage::AfterPort12800);
     g_runtime.dpi_v2_url_available = dpi_v2_server >= 0;
     if (dpi_v2_server < 0) {
         std::printf("[singleDPI] warning: DPI v2 URL server failed to listen on TCP port %d\n",
@@ -1026,6 +1230,8 @@ int main() {
             kVersion, kPort);
     }
 
+    set_startup_stage(StartupStage::Serving);
+    debug_log("serving");
     for (;;) {
         fd_set read_fds;
         FD_ZERO(&read_fds);
