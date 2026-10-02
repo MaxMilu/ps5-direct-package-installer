@@ -41,6 +41,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "cache.hpp"
@@ -62,6 +63,7 @@ constexpr int kDebugAuthIdProbeProtection = PROT_READ | PROT_WRITE | PROT_EXEC;
 constexpr unsigned long kDebugAuthId = 0x4800000000000006UL;
 #ifdef SINGLEDPI_DEBUG_LOG
 constexpr const char* kDebugLogPath = "/data/singleDPI/singleDPI-debug.log";
+constexpr const char* kDebugLogHeader = "singleDPI version: 0.2.2\n";
 #endif
 
 // This logger deliberately avoids std::string, malloc, networking, and AppInst.
@@ -149,12 +151,55 @@ std::size_t append_signed(char* output, std::size_t offset, std::size_t capacity
 void debug_log_raw(const char* text, std::size_t size) {
     const int fd = open(kDebugLogPath, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd < 0) return;
+    char timestamped_line[768]{};
+    timespec now{};
+    tm local_time{};
+    clock_gettime(CLOCK_REALTIME, &now);
+    localtime_r(&now.tv_sec, &local_time);
+    const int timestamp_length = std::snprintf(timestamped_line, sizeof(timestamped_line),
+        "%04d-%02d-%02d %02d:%02d:%02d.%03ld ",
+        local_time.tm_year + 1900, local_time.tm_mon + 1, local_time.tm_mday,
+        local_time.tm_hour, local_time.tm_min, local_time.tm_sec,
+        now.tv_nsec / 1000000L);
+    if (timestamp_length <= 0 || static_cast<std::size_t>(timestamp_length) >= sizeof(timestamped_line)) {
+        close(fd);
+        return;
+    }
+
+    const std::size_t prefix_size = static_cast<std::size_t>(timestamp_length);
+    const std::size_t available = sizeof(timestamped_line) - prefix_size;
+    const std::size_t copied = size < available ? size : available;
+    std::memcpy(timestamped_line + prefix_size, text, copied);
     std::size_t written = 0;
-    while (written < size) {
-        const ssize_t result = write(fd, text + written, size - written);
+    const std::size_t total_size = prefix_size + copied;
+    while (written < total_size) {
+        const ssize_t result = write(fd, timestamped_line + written, total_size - written);
         if (result < 0 && errno == EINTR) continue;
         if (result <= 0) break;
         written += static_cast<std::size_t>(result);
+    }
+    fsync(fd);
+    close(fd);
+}
+
+void debug_log_initialize() {
+    const int fd = open(kDebugLogPath, O_RDWR | O_CREAT, 0644);
+    if (fd < 0) return;
+
+    char existing_header[sizeof(kDebugLogHeader)]{};
+    const ssize_t read_size = pread(fd, existing_header, sizeof(existing_header) - 1, 0);
+    const bool same_version = read_size == static_cast<ssize_t>(sizeof(kDebugLogHeader) - 1) &&
+        std::memcmp(existing_header, kDebugLogHeader, sizeof(kDebugLogHeader) - 1) == 0;
+
+    if (!same_version) {
+        if (ftruncate(fd, 0) == 0) {
+            lseek(fd, 0, SEEK_SET);
+            write(fd, kDebugLogHeader, sizeof(kDebugLogHeader) - 1);
+        }
+    } else {
+        lseek(fd, 0, SEEK_END);
+        const char separator[] = "\n--- new singleDPI session ---\n";
+        write(fd, separator, sizeof(separator) - 1);
     }
     fsync(fd);
     close(fd);
@@ -219,6 +264,7 @@ void install_debug_panic_handlers() {
 void set_startup_stage(StartupStage) {}
 void debug_log(const char*) {}
 void debug_log_result(const char*, long, int = 0) {}
+void debug_log_initialize() {}
 void install_debug_panic_handlers() {}
 
 #endif
@@ -1154,6 +1200,7 @@ int main() {
     // Create the log directory before any code which may depend on it.
     mkdir("/data/singleDPI", 0755);
     install_debug_panic_handlers();
+    debug_log_initialize();
     debug_log("BEGIN singleDPI debug build");
 
     syscall(SYS_thr_set_name, -1, kProcessName);

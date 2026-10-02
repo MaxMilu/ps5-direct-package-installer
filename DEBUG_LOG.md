@@ -13,8 +13,20 @@ stage, kstuff RWX probing, AuthID preparation, AppInst initialization, and
 9090/12800 socket creation results. The build also installs handlers for
 common process-fatal signals. A panic record has this form:
 
+The first line is always the exact build version:
+
 ```text
-PANIC signal=11 code=1 errno=0 address=0x... context=0x... stage=before_appinst
+singleDPI version: 0.2.2
+```
+
+All subsequent log records include a local timestamp with millisecond
+precision. If the existing file already belongs to version 0.2.2, a visible
+session separator is appended before the new startup records. If the first
+line belongs to another version, the old file is truncated and recreated with
+the current version header.
+
+```text
+2026-10-03 12:34:56.789 PANIC signal=11 code=1 errno=0 address=0x... context=0x... stage=before_appinst
 ```
 
 The `address` is the fault address and `stage` is the last startup boundary
