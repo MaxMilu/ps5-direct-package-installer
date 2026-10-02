@@ -63,7 +63,7 @@ constexpr int kDebugAuthIdProbeProtection = PROT_READ | PROT_WRITE | PROT_EXEC;
 constexpr unsigned long kDebugAuthId = 0x4800000000000006UL;
 #ifdef SINGLEDPI_DEBUG_LOG
 constexpr const char* kDebugLogPath = "/data/singleDPI/singleDPI-debug.log";
-constexpr const char* kDebugLogHeader = "singleDPI version: 0.2.2\n";
+constexpr char kDebugLogHeader[] = "singleDPI version: 0.2.2\n";
 #endif
 
 // This logger deliberately avoids std::string, malloc, networking, and AppInst.
